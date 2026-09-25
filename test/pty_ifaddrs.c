@@ -1,4 +1,5 @@
 /* pseudo-terminals and getifaddrs */
+#include <errno.h>
 #include <ifaddrs.h>
 #include <fcntl.h>
 #include <net/if.h>
