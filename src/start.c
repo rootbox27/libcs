@@ -90,6 +90,7 @@ hidden void __init_tp(struct pthread *p)
 	if (__syscall2(SYS_arch_prctl, 0x1002 /* ARCH_SET_FS */, (long)p) < 0)
 		early_die();
 	p->tid = (int)__syscall1(SYS_set_tid_address, (long)&p->exit_futex);
+	p->exit_futex = p->tid;
 	p->tsd = p->tsd_storage;
 }
 
@@ -99,18 +100,22 @@ static void init_tls(uintptr_t base, const Elf64_Phdr *ph, size_t phnum, const u
 	for (size_t i = 0; i < phnum; i++)
 		if (ph[i].p_type == PT_TLS)
 			tls = &ph[i];
-	size_t align = 64, memsz = 0, filesz = 0;
+	size_t seg_align = 1, memsz = 0, filesz = 0;
 	const void *image = 0;
 	if (tls) {
-		if (tls->p_align > align)
-			align = tls->p_align;
+		if (tls->p_align > seg_align)
+			seg_align = tls->p_align;
 		memsz = tls->p_memsz;
 		filesz = tls->p_filesz;
 		image = (const void *)(base + tls->p_vaddr);
 	}
-	/* Variant II: TLS block sits immediately below the TCB, and the
-	 * TCB must be aligned to the TLS segment alignment. */
-	size_t off = ROUND_UP(memsz, align);
+	/* Variant II: the TLS block sits immediately below the TCB. The
+	 * static linker resolves TLS references to tp - round_up(memsz,
+	 * p_align), so the offset must use the segment's own alignment. The
+	 * TCB itself gets at least cache-line alignment, which (both being
+	 * powers of two) keeps tp - off aligned to p_align as well. */
+	size_t align = seg_align > 64 ? seg_align : 64;
+	size_t off = ROUND_UP(memsz, seg_align);
 	size_t total = ROUND_UP(off + sizeof(struct pthread) + align, PAGE_SZ);
 	__libc.tls_size = memsz;
 	__libc.tls_file_size = filesz;

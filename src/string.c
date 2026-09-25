@@ -384,7 +384,7 @@ int strverscmp(const char *l0, const char *r0)
 		else if (c != '0')
 			z = 0;
 	}
-	if (l[dp] - '1' < 9U && r[dp] - '1' < 9U) {
+	if ((unsigned)(l[dp] - '1') < 9 && (unsigned)(r[dp] - '1') < 9) {
 		for (j = i; isdigit(l[j]); j++)
 			if (!isdigit(r[j]))
 				return 1;
@@ -420,7 +420,7 @@ int timingsafe_memcmp(const void *a, const void *b, size_t n)
 	for (size_t i = 0; i < n; i++) {
 		int lt = (p[i] - q[i]) >> 8;          /* -1 if p<q */
 		int gt = (q[i] - p[i]) >> 8;          /* -1 if p>q */
-		int cmp = gt - lt;                    /* 1, -1, or 0 */
+		int cmp = lt - gt;                    /* -1, 1, or 0 */
 		res |= cmp & ~done;
 		done |= lt | gt;
 	}

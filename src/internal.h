@@ -107,7 +107,8 @@ struct pthread {
 	size_t map_size;
 	void **tsd;                  /* thread-specific data array */
 	int cancel_disabled;
-	int canceled;
+	int cancel_async;
+	volatile int canceled;
 	struct pthread *next, *prev; /* list of live threads */
 	char name[16];
 	unsigned long sigmask_saved;
@@ -160,11 +161,13 @@ hidden __attribute__((__noreturn__, __cold__)) void __fatal(const char *msg);
 hidden __attribute__((__noreturn__, __cold__)) void __chk_fail(void);
 hidden void __write_str(int fd, const char *s);
 hidden void __stdio_exit(void);
-hidden void __malloc_init(void);
+hidden void __malloc_threads_start(void);
 hidden void __random_fork(void);
 hidden void __malloc_atfork(int phase);
 hidden void __stdio_atfork(int phase);
 hidden void __tsd_run_dtors(void);
+hidden void __testcancel(void);
+hidden int __futex_timedwait(volatile int *addr, int val, clockid_t clk, const struct timespec *abs, int priv);
 hidden int __clone(int (*fn)(void *), void *stack, int flags, void *arg, int *ptid, void *tls, int *ctid);
 hidden __attribute__((__noreturn__)) void __unmapself(void *base, size_t size);
 hidden int __fmodeflags(const char *mode);
@@ -179,5 +182,6 @@ struct k_sigaction {
 	unsigned mask[2];
 };
 hidden void __restore_rt(void);
+
 
 #endif

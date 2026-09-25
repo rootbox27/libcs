@@ -5,7 +5,6 @@
 #include <sched.h>
 #include <time.h>
 __BEGIN_DECLS
-typedef struct { size_t __stacksize, __guardsize; int __detach; void *__stackaddr; } pthread_attr_t;
 typedef struct { int __lock, __type, __owner, __count; } pthread_mutex_t;
 typedef struct { int __type; } pthread_mutexattr_t;
 typedef struct { int __seq, __clock; } pthread_cond_t;

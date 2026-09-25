@@ -75,6 +75,8 @@ int system(const char *);
 char *realpath(const char *__restrict, char *__restrict);
 int mkstemp(char *);
 int mkostemp(char *, int);
+int mkstemps(char *, int);
+int mkostemps(char *, int, int);
 char *mkdtemp(char *);
 int getloadavg(double *, int);
 
@@ -86,6 +88,11 @@ size_t wcstombs(char *__restrict, const wchar_t *__restrict, size_t);
 
 const char *getprogname(void);
 void setprogname(const char *);
+int posix_openpt(int);
+int grantpt(int);
+int unlockpt(int);
+char *ptsname(int);
+int ptsname_r(int, char *, size_t);
 __END_DECLS
 #include <alloca.h>
 #endif

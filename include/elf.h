@@ -42,12 +42,22 @@ typedef Elf64_Xword Elf64_Relr;
 #define PT_GNU_STACK 0x6474e551
 #define PT_GNU_RELRO 0x6474e552
 #define DT_NULL 0
+#define DT_HASH 4
+#define DT_STRTAB 5
+#define DT_SYMTAB 6
 #define DT_RELA 7
 #define DT_RELASZ 8
 #define DT_RELAENT 9
 #define DT_RELRSZ 35
 #define DT_RELR 36
 #define DT_RELRENT 37
+#define DT_GNU_HASH 0x6ffffef5
+#define SHN_UNDEF 0
+#define STT_FUNC 2
+#define STB_GLOBAL 1
+#define STB_WEAK 2
+#define ELF64_ST_BIND(i) ((i) >> 4)
+#define ELF64_ST_TYPE(i) ((i) & 0xf)
 #define ELF64_R_TYPE(i) ((i) & 0xffffffff)
 #define ELF64_R_SYM(i) ((i) >> 32)
 #define R_X86_64_NONE 0

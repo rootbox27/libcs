@@ -66,6 +66,7 @@ int fchdir(int);
 char *getcwd(char *, size_t);
 int chown(const char *, uid_t, gid_t);
 int fchown(int, uid_t, gid_t);
+int fchownat(int, const char *, uid_t, gid_t, int);
 int lchown(const char *, uid_t, gid_t);
 int link(const char *, const char *);
 int linkat(int, const char *, int, const char *, int);
@@ -145,6 +146,7 @@ int getopt(int, char *const[], const char *);
 extern char *optarg;
 extern int optind, opterr, optopt;
 extern char **environ;
+char *crypt(const char *, const char *);
 __END_DECLS
 #ifdef __CITADEL_FORTIFY
 #include <bits/fortify_unistd.h>

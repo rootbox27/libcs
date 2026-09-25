@@ -17,6 +17,8 @@ typedef double double_t;
 #define MATH_ERRNO 1
 #define MATH_ERREXCEPT 2
 #define math_errhandling 2
+#define FP_ILOGB0 (-2147483647 - 1)
+#define FP_ILOGBNAN (-2147483647 - 1)
 #define fpclassify(x) __builtin_fpclassify(FP_NAN, FP_INFINITE, FP_NORMAL, FP_SUBNORMAL, FP_ZERO, x)
 #define isnan(x) __builtin_isnan(x)
 #define isinf(x) __builtin_isinf_sign(x)
@@ -57,15 +59,23 @@ __CITADEL_MATH3(logb)
 __CITADEL_MATH3_2(pow) __CITADEL_MATH3_2(atan2) __CITADEL_MATH3_2(fmod) __CITADEL_MATH3_2(hypot)
 __CITADEL_MATH3_2(fmin) __CITADEL_MATH3_2(fmax) __CITADEL_MATH3_2(fdim) __CITADEL_MATH3_2(copysign)
 __CITADEL_MATH3_2(remainder) __CITADEL_MATH3_2(nextafter)
-double fma(double, double, double); float fmaf(float, float, float);
+__CITADEL_MATH3(erf) __CITADEL_MATH3(erfc) __CITADEL_MATH3(lgamma) __CITADEL_MATH3(tgamma)
+double fma(double, double, double); float fmaf(float, float, float); long double fmal(long double, long double, long double);
+double remquo(double, double, int *); float remquof(float, float, int *); long double remquol(long double, long double, int *);
+double scalbln(double, long); float scalblnf(float, long); long double scalblnl(long double, long);
+double nexttoward(double, long double); float nexttowardf(float, long double); long double nexttowardl(long double, long double);
+double lgamma_r(double, int *); float lgammaf_r(float, int *); long double lgammal_r(long double, int *);
+extern int signgam;
 double frexp(double, int *); float frexpf(float, int *); long double frexpl(long double, int *);
 double ldexp(double, int); float ldexpf(float, int); long double ldexpl(long double, int);
 double scalbn(double, int); float scalbnf(float, int); long double scalbnl(long double, int);
 double modf(double, double *); float modff(float, float *); long double modfl(long double, long double *);
-int ilogb(double);
-long lround(double); long lroundf(float); long long llround(double);
-long lrint(double); long lrintf(float); long long llrint(double);
-double nan(const char *); float nanf(const char *);
+int ilogb(double); int ilogbf(float); int ilogbl(long double);
+long lround(double); long lroundf(float); long lroundl(long double);
+long long llround(double); long long llroundf(float); long long llroundl(long double);
+long lrint(double); long lrintf(float); long lrintl(long double);
+long long llrint(double); long long llrintf(float); long long llrintl(long double);
+double nan(const char *); float nanf(const char *); long double nanl(const char *);
 #undef __CITADEL_MATH3
 #undef __CITADEL_MATH3_2
 __END_DECLS

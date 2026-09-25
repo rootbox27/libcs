@@ -60,12 +60,35 @@ typedef void (*sighandler_t)(int);
 #define SI_KERNEL 0x80
 #define SI_QUEUE (-1)
 #define SI_TIMER (-2)
+#define SI_MESGQ (-3)
+#define SI_ASYNCIO (-4)
+#define SI_SIGIO (-5)
 #define SI_TKILL (-6)
 #define SS_ONSTACK 1
 #define SS_DISABLE 2
 #define MINSIGSTKSZ 2048
 #define SIGSTKSZ 8192
 union sigval { int sival_int; void *sival_ptr; };
+struct sigevent {
+	union sigval sigev_value;
+	int sigev_signo;
+	int sigev_notify;
+	union {
+		char __pad[64 - 2 * sizeof(int) - sizeof(union sigval)];
+		pid_t sigev_notify_thread_id;
+		struct {
+			void (*sigev_notify_function)(union sigval);
+			pthread_attr_t *sigev_notify_attributes;
+		} __sev_thread;
+	} __sev;
+};
+#define sigev_notify_thread_id __sev.sigev_notify_thread_id
+#define sigev_notify_function __sev.__sev_thread.sigev_notify_function
+#define sigev_notify_attributes __sev.__sev_thread.sigev_notify_attributes
+#define SIGEV_SIGNAL 0
+#define SIGEV_NONE 1
+#define SIGEV_THREAD 2
+#define SIGEV_THREAD_ID 4
 typedef struct {
 	int si_signo, si_errno, si_code;
 	union {
@@ -127,4 +150,5 @@ int siginterrupt(int, int);
 int pthread_kill(pthread_t, int);
 extern const char *const sys_siglist[];
 __END_DECLS
+#include <sys/ucontext.h>
 #endif
