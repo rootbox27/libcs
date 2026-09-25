@@ -1,46 +1,57 @@
 #ifndef _TGMATH_H
 #define _TGMATH_H
-/* Type-generic math (real types only; <complex.h> is not provided).
- * Integer arguments select the double function, as C requires. */
+/* Type-generic math. Integer arguments select the double function, as C
+ * requires; complex arguments select the <complex.h> function where there
+ * is one. */
 #include <math.h>
+#include <complex.h>
 
-#define __tg_t(x) _Generic((x), float: (float)0, long double: (long double)0, default: (double)0)
+#define __tg_t(x) _Generic((x), float: (float)0, long double: (long double)0, \
+	float _Complex: (float _Complex)0, double _Complex: (double _Complex)0, \
+	long double _Complex: (long double _Complex)0, default: (double)0)
 #define __TG1(fn, x) _Generic(__tg_t(x), float: fn##f, long double: fn##l, default: fn)
 #define __TG2(fn, x, y) _Generic(__tg_t(x) + __tg_t(y), float: fn##f, long double: fn##l, default: fn)
 #define __TG3(fn, x, y, z) _Generic(__tg_t(x) + __tg_t(y) + __tg_t(z), float: fn##f, long double: fn##l, default: fn)
+/* functions with a complex counterpart */
+#define __TGC(fn, cfn, t) _Generic(t, float: fn##f, long double: fn##l, float _Complex: cfn##f, \
+	double _Complex: cfn, long double _Complex: cfn##l, default: fn)
+#define __TGC1(fn, x) __TGC(fn, c##fn, __tg_t(x))
+/* complex-only functions: real arguments are treated as complex */
+#define __TGZ(cfn, x) _Generic(__tg_t(x), float: cfn##f, float _Complex: cfn##f, long double: cfn##l, \
+	long double _Complex: cfn##l, default: cfn)
 
 #undef acos
-#define acos(x) __TG1(acos, x)(x)
+#define acos(x) __TGC1(acos, x)(x)
 #undef asin
-#define asin(x) __TG1(asin, x)(x)
+#define asin(x) __TGC1(asin, x)(x)
 #undef atan
-#define atan(x) __TG1(atan, x)(x)
+#define atan(x) __TGC1(atan, x)(x)
 #undef acosh
-#define acosh(x) __TG1(acosh, x)(x)
+#define acosh(x) __TGC1(acosh, x)(x)
 #undef asinh
-#define asinh(x) __TG1(asinh, x)(x)
+#define asinh(x) __TGC1(asinh, x)(x)
 #undef atanh
-#define atanh(x) __TG1(atanh, x)(x)
+#define atanh(x) __TGC1(atanh, x)(x)
 #undef cos
-#define cos(x) __TG1(cos, x)(x)
+#define cos(x) __TGC1(cos, x)(x)
 #undef sin
-#define sin(x) __TG1(sin, x)(x)
+#define sin(x) __TGC1(sin, x)(x)
 #undef tan
-#define tan(x) __TG1(tan, x)(x)
+#define tan(x) __TGC1(tan, x)(x)
 #undef cosh
-#define cosh(x) __TG1(cosh, x)(x)
+#define cosh(x) __TGC1(cosh, x)(x)
 #undef sinh
-#define sinh(x) __TG1(sinh, x)(x)
+#define sinh(x) __TGC1(sinh, x)(x)
 #undef tanh
-#define tanh(x) __TG1(tanh, x)(x)
+#define tanh(x) __TGC1(tanh, x)(x)
 #undef exp
-#define exp(x) __TG1(exp, x)(x)
+#define exp(x) __TGC1(exp, x)(x)
 #undef log
-#define log(x) __TG1(log, x)(x)
+#define log(x) __TGC1(log, x)(x)
 #undef sqrt
-#define sqrt(x) __TG1(sqrt, x)(x)
+#define sqrt(x) __TGC1(sqrt, x)(x)
 #undef fabs
-#define fabs(x) __TG1(fabs, x)(x)
+#define fabs(x) __TGC(fabs, cabs, __tg_t(x))(x)
 #undef cbrt
 #define cbrt(x) __TG1(cbrt, x)(x)
 #undef ceil
@@ -104,7 +115,7 @@
 #undef remainder
 #define remainder(x, y) __TG2(remainder, x, y)(x, y)
 #undef pow
-#define pow(x, y) __TG2(pow, x, y)(x, y)
+#define pow(x, y) __TGC(pow, cpow, __tg_t(x) + __tg_t(y))(x, y)
 #undef fma
 #define fma(x, y, z) __TG3(fma, x, y, z)(x, y, z)
 #undef remquo
@@ -119,5 +130,16 @@
 #define scalbln(x, n) __TG1(scalbln, x)(x, n)
 #undef nexttoward
 #define nexttoward(x, y) __TG1(nexttoward, x)(x, y)
+
+#undef carg
+#define carg(x) __TGZ(carg, x)(x)
+#undef cimag
+#define cimag(x) __TGZ(cimag, x)(x)
+#undef conj
+#define conj(x) __TGZ(conj, x)(x)
+#undef cproj
+#define cproj(x) __TGZ(cproj, x)(x)
+#undef creal
+#define creal(x) __TGZ(creal, x)(x)
 
 #endif
