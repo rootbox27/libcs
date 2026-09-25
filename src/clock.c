@@ -174,7 +174,11 @@ int clock_nanosleep(clockid_t clk, int flags, const struct timespec *req, struct
 {
 	if (clk == CLOCK_THREAD_CPUTIME_ID)
 		return EINVAL;
-	return (int)-__sys(SYS_clock_nanosleep, clk, flags, req, rem);
+	__testcancel();
+	int r = (int)-__sys(SYS_clock_nanosleep, clk, flags, req, rem);
+	if (r == EINTR)
+		__testcancel();
+	return r;
 }
 
 int nanosleep(const struct timespec *req, struct timespec *rem)

@@ -13,6 +13,9 @@
 
 /* ---- fork ---- */
 
+/* Defined by pthread.c only when threads are linked in. */
+extern hidden volatile int __thread_count __attribute__((__weak__));
+
 struct atfork {
 	void (*prepare)(void), (*parent)(void), (*child)(void);
 };
@@ -54,7 +57,10 @@ pid_t fork(void)
 	if (r == 0) {
 		struct pthread *self = __self();
 		self->tid = (int)__sys(SYS_set_tid_address, &self->exit_futex);
+		self->exit_futex = self->tid;
 		atfork_lock = 0;
+		if (&__thread_count)
+			__thread_count = 1;
 	}
 	__sys(SYS_rt_sigprocmask, SIG_SETMASK, &old, 0, 8);
 

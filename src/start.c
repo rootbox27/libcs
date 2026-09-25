@@ -90,6 +90,7 @@ hidden void __init_tp(struct pthread *p)
 	if (__syscall2(SYS_arch_prctl, 0x1002 /* ARCH_SET_FS */, (long)p) < 0)
 		early_die();
 	p->tid = (int)__syscall1(SYS_set_tid_address, (long)&p->exit_futex);
+	p->exit_futex = p->tid;
 	p->tsd = p->tsd_storage;
 }
 

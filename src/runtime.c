@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <time.h>
 
 int *__errno_location(void)
 {
@@ -30,6 +31,19 @@ hidden int __futex_wake(volatile int *addr, int n)
 {
 	return (int)__sys(SYS_futex, addr, 1 | 128 /* WAKE|PRIVATE */, n);
 }
+/* Wait while *addr == val, until an absolute time on clock clk (or
+ * forever). Returns 0, -ETIMEDOUT, -EINTR or -EAGAIN. */
+hidden int __futex_timedwait(volatile int *addr, int val, clockid_t clk, const struct timespec *abs, int priv)
+{
+	int op = 9 /* FUTEX_WAIT_BITSET */ | (priv ? 128 : 0) | (abs && clk == CLOCK_REALTIME ? 256 : 0);
+	long r = __sys(SYS_futex, addr, op, val, abs, 0, 0xffffffff);
+	return r == -ETIMEDOUT || r == -EINTR || r == -EAGAIN ? (int)r : 0;
+}
+
+/* Cancellation points call this; the real one is in pthread.c. */
+static void no_cancel(void) {}
+weak_alias(no_cancel, __testcancel);
+
 hidden void __lock(volatile int *l)
 {
 	int c = __sync_val_compare_and_swap(l, 0, 1);
