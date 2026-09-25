@@ -87,7 +87,8 @@ allocator checks. A test may have a `.expected` file for its stdout.
   `getproto*` families; `<ifaddrs.h>`, `<net/if.h>`, packet headers.
 - **Text**: `<regex.h>` (POSIX basic and extended, matching glibc on a
   1,800-case corpus), `<glob.h>` (with GNU brace and tilde expansion),
-  `<wordexp.h>`, `<iconv.h>` (UTF-8/16/32, Latin-1, ASCII and others,
+  `<wordexp.h>`, `<iconv.h>` (UTF-8/16/32, UCS-2/4, ASCII, ISO-8859-1/15
+  and CP1252,
   matching glibc output), `<monetary.h>`, `<fmtmsg.h>`, `<langinfo.h>`,
   `<nl_types.h>`.
 - **Other POSIX and Linux interfaces**: `<search.h>`, `<ftw.h>`,
