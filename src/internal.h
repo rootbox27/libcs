@@ -161,7 +161,7 @@ hidden __attribute__((__noreturn__, __cold__)) void __fatal(const char *msg);
 hidden __attribute__((__noreturn__, __cold__)) void __chk_fail(void);
 hidden void __write_str(int fd, const char *s);
 hidden void __stdio_exit(void);
-hidden void __malloc_init(void);
+hidden void __malloc_threads_start(void);
 hidden void __random_fork(void);
 hidden void __malloc_atfork(int phase);
 hidden void __stdio_atfork(int phase);

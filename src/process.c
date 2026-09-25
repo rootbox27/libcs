@@ -62,6 +62,8 @@ pid_t fork(void)
 		if (atfork_tab[i].prepare)
 			atfork_tab[i].prepare();
 
+	/* no thread may be inside malloc when the heap is copied */
+	__malloc_atfork(-1);
 	sigset_t all, old;
 	memset(&all, 0xff, sizeof all);
 	/* no set*id broadcast may be half done when we copy the process */
@@ -83,6 +85,7 @@ pid_t fork(void)
 		__thread_list_unlock();
 	}
 	__sys(SYS_rt_sigprocmask, SIG_SETMASK, &old, 0, 8);
+	__malloc_atfork(r == 0 ? 1 : 0);
 
 	for (size_t i = 0; i < n; i++) {
 		void (*fn)(void) = r == 0 ? atfork_tab[i].child : atfork_tab[i].parent;

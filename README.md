@@ -36,8 +36,23 @@ allocator checks. A test may have a `.expected` file for its stdout.
   `/dev/null` if closed at startup of a setuid program.
 - `arc4random` (ChaCha20) with its state wiped on fork and excluded from
   core dumps.
-- Allocator (placeholder, see below) puts each allocation against a guard
-  page and checks a tagged header on `free`.
+- The allocator is OpenBSD's malloc (`src/omalloc/`, ISC licensed, kept
+  close to upstream). Its protections:
+  - randomized chunk placement and delayed, randomized reuse of freed
+    chunks;
+  - metadata kept away from user data, with a canary-checked pool
+    directory between guard pages;
+  - freed memory junk-filled;
+  - double-free and invalid-pointer detection;
+  - pages are unmapped or cached rather than recycled in place.
+
+  Citadel additionally turns on, by default:
+  - canaries after small chunks, checked on free;
+  - a guard page after every page-sized allocation;
+  - rejection of pointers into the middle of a chunk.
+
+  The option pages are sealed with `mseal` where the kernel supports it.
+  `MALLOC_OPTIONS` works as on OpenBSD but is ignored in setuid programs.
 - `setuid` and the other set*id calls apply to every thread (a signal
   broadcast, as the kernel only changes the calling thread); if any thread
   fails to switch, the process aborts rather than run with mixed
@@ -121,8 +136,6 @@ allocator checks. A test may have a `.expected` file for its stdout.
 
 ## Not yet done
 
-- A real memory allocator. `src/malloc.c` is a placeholder that makes
-  one mapping per allocation; it is safe but slow and wasteful.
 - Locales other than C/C.UTF-8.
 - Legacy password hashes (DES and MD5 `crypt`) are refused on purpose.
 - Dynamic linking: only static executables are supported.

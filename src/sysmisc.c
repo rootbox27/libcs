@@ -428,29 +428,6 @@ int getloadavg(double *a, int n)
 	return n;
 }
 
-void *recallocarray(void *p, size_t oldn, size_t n, size_t size)
-{
-	size_t oldsz, newsz;
-	if (!p)
-		return calloc(n, size);
-	if (__builtin_mul_overflow(n, size, &newsz) || __builtin_mul_overflow(oldn, size, &oldsz)) {
-		errno = ENOMEM;
-		return 0;
-	}
-	/* never realloc in place: the old contents are cleared */
-	void *q = malloc(newsz ? newsz : 1);
-	if (!q)
-		return 0;
-	if (newsz > oldsz) {
-		memcpy(q, p, oldsz);
-		memset((char *)q + oldsz, 0, newsz - oldsz);
-	} else {
-		memcpy(q, p, newsz);
-	}
-	freezero(p, oldsz);
-	return q;
-}
-
 /* ---- terminals ---- */
 
 pid_t tcgetpgrp(int fd)

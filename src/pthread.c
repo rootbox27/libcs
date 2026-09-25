@@ -316,6 +316,9 @@ int pthread_create(pthread_t *__restrict res, const pthread_attr_t *__restrict a
 	void *sp = (void *)ROUND_DOWN(tp - tls, 16);
 
 	unsigned long old;
+	/* before the first thread exists: give malloc its per-thread pools */
+	if (!__libc.threaded)
+		__malloc_threads_start();
 	__libc.threaded = 1;
 	__lock(&list_lock);
 	block_all(&old);

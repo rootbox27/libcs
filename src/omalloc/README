@@ -1,0 +1,33 @@
+OpenBSD's malloc, used as Citadel's allocator.
+
+Source: lib/libc/stdlib/malloc.c from OpenBSD
+        ($OpenBSD: malloc.c,v 1.300 2025/10/23 18:49:46 miod Exp $)
+        https://github.com/openbsd/src/blob/master/lib/libc/stdlib/malloc.c
+License: ISC (see the header of malloc.c); copyright Otto Moerbeek,
+        Matthew Dempsky, Damien Miller and Poul-Henning Kamp.
+
+malloc.c is kept as close to upstream as possible, so updates can be
+merged. Every local change is marked with a "CITADEL:" comment:
+
+  - OpenBSD's headers are replaced by compat.h, which maps what the file
+    expects (locks, the thread id, mimmutable, the options sysctl,
+    sys/queue.h lists) onto Citadel's runtime;
+  - no .openbsd.mutable section;
+  - aligned_alloc accepts any size (C17, DR 460);
+  - a free of a pointer into the middle of a chunk is rejected, not
+    treated as a free of the whole chunk;
+  - a region-growing mapping that lands away from its hint is unmapped;
+  - malloc_usable_size is added at the end.
+
+It is built with MALLOC_SMALL (no statistics or leak reports, which need
+ktrace, a tree library and dladdr).
+
+Defaults differ from OpenBSD's: Citadel turns on chunk canaries (C) and
+guard pages after page-sized allocations (G), in the place of OpenBSD's
+vm.malloc_conf sysctl. MALLOC_OPTIONS still overrides them, except in
+setuid/setgid programs, where it is ignored. See malloc(3) on OpenBSD for
+the option letters.
+
+glue.c holds the fork and thread-start hooks and the functions
+malloc.c does not define (reallocarray, memalign, valloc, pvalloc,
+malloc_trim).
