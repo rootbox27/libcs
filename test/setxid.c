@@ -55,7 +55,7 @@ int main(void)
 	/* a thread created afterwards has them too */
 	go = 1;
 	pthread_t late;
-	void *r;
+	void *r = 0;
 	CHECK(pthread_create(&late, 0, spinner, 0) == 0 && pthread_join(late, &r) == 0);
 	CHECK((long)r == 65534 * 100000L + 65534);
 	/* and the drop cannot be undone from any thread */

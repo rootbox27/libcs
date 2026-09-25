@@ -146,6 +146,7 @@ int getopt(int, char *const[], const char *);
 extern char *optarg;
 extern int optind, opterr, optopt;
 extern char **environ;
+char *crypt(const char *, const char *);
 __END_DECLS
 #ifdef __CITADEL_FORTIFY
 #include <bits/fortify_unistd.h>
