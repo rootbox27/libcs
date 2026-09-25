@@ -19,11 +19,14 @@ ifneq ($(shell $(CC) -v 2>&1 | grep -c '^gcc version'),0)
 CFLAGS_LIB  += -fno-tree-loop-distribute-patterns
 endif
 
+# Floating-point code must be evaluated exactly as written.
+CFLAGS_MATH = -ffp-contract=off -fno-fast-math -frounding-math
+
 # Everything reached from _start before the TCB is installed must not use
 # the stack protector (%fs is not valid yet).
 NOSSP = src/start.c
 
-LIB_C   = $(filter-out src/crt1.c,$(wildcard src/*.c))
+LIB_C   = $(filter-out src/crt1.c,$(wildcard src/*.c src/math/*.c))
 LIB_S   = $(filter-out src/arch/crt1.S,$(wildcard src/arch/*.S))
 LIB_OBJ = $(patsubst src/%.c,obj/%.o,$(LIB_C)) $(patsubst src/%.S,obj/%.o,$(LIB_S))
 
@@ -32,7 +35,7 @@ all: lib/libc.a lib/crt1.o
 # -MMD: the compiler records every header each object uses (obj/*.d).
 obj/%.o: src/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS_LIB) $(CFLAGS_LIB) -MMD -MP $(if $(filter $<,$(NOSSP)),-fno-stack-protector) -c -o $@ $<
+	$(CC) $(CPPFLAGS_LIB) $(CFLAGS_LIB) -MMD -MP $(if $(filter $<,$(NOSSP)),-fno-stack-protector) $(if $(filter src/math/%,$<),$(CFLAGS_MATH)) -c -o $@ $<
 
 -include $(wildcard obj/*.d obj/*/*.d)
 
