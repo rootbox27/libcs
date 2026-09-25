@@ -88,6 +88,11 @@ size_t wcstombs(char *__restrict, const wchar_t *__restrict, size_t);
 
 const char *getprogname(void);
 void setprogname(const char *);
+int posix_openpt(int);
+int grantpt(int);
+int unlockpt(int);
+char *ptsname(int);
+int ptsname_r(int, char *, size_t);
 __END_DECLS
 #include <alloca.h>
 #endif

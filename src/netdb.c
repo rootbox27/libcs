@@ -98,6 +98,12 @@ char *if_indextoname(unsigned idx, char *name)
 	return name;
 }
 
+static int by_index(const void *a, const void *b)
+{
+	unsigned x = ((const struct if_nameindex *)a)->if_index, y = ((const struct if_nameindex *)b)->if_index;
+	return (x > y) - (x < y);
+}
+
 struct if_nameindex *if_nameindex(void)
 {
 	DIR *d = opendir("/sys/class/net");
@@ -133,6 +139,8 @@ struct if_nameindex *if_nameindex(void)
 	closedir(d);
 	if (v && !n)
 		v[0] = (struct if_nameindex){ 0, 0 };
+	if (v && n > 1)
+		qsort(v, n, sizeof *v, by_index);
 	if (!v)
 		errno = ENOBUFS;
 	return v;
