@@ -54,6 +54,10 @@ TEST_NAMES = $(filter-out harness,$(patsubst test/%.c,%,$(TEST_SRC)))
 CPPFLAGS_T = -nostdinc -isystem include -isystem $(CC_INC) -Itest
 CFLAGS_T   = -std=gnu11 -O2 -g -fPIE -fstack-protector-strong -Wall -Wextra -Werror \
              -Wno-unused-parameter -fno-builtin
+# GCC folds printf return values at compile time; tests must see ours.
+ifneq ($(shell $(CC) -v 2>&1 | grep -c '^gcc version'),0)
+CFLAGS_T   += -fno-printf-return-value
+endif
 LDFLAGS_T  = -nostdlib -Wl,-z,relro,-z,now -Wl,-z,noexecstack
 LIBGCC     := $(shell $(CC) -print-libgcc-file-name)
 

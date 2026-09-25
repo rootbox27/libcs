@@ -2,8 +2,16 @@
  * and process identity. */
 #include "internal.h"
 #include <errno.h>
+#include <fcntl.h>
+#include <stdarg.h>
 #include <stdint.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/random.h>
 #include <unistd.h>
 
 void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
@@ -74,3 +82,166 @@ uid_t geteuid(void) { return (uid_t)__sys(SYS_geteuid); }
 gid_t getgid(void) { return (gid_t)__sys(SYS_getgid); }
 gid_t getegid(void) { return (gid_t)__sys(SYS_getegid); }
 int getpagesize(void) { return (int)PAGE_SZ; }
+
+int open(const char *path, int flags, ...)
+{
+	mode_t mode = 0;
+	if ((flags & O_CREAT) || (flags & O_TMPFILE) == O_TMPFILE) {
+		va_list ap;
+		va_start(ap, flags);
+		mode = va_arg(ap, mode_t);
+		va_end(ap);
+	}
+	return (int)sys(SYS_openat, AT_FDCWD, path, flags, mode);
+}
+
+int openat(int dirfd, const char *path, int flags, ...)
+{
+	mode_t mode = 0;
+	if ((flags & O_CREAT) || (flags & O_TMPFILE) == O_TMPFILE) {
+		va_list ap;
+		va_start(ap, flags);
+		mode = va_arg(ap, mode_t);
+		va_end(ap);
+	}
+	return (int)sys(SYS_openat, dirfd, path, flags, mode);
+}
+
+int fcntl(int fd, int cmd, ...)
+{
+	va_list ap;
+	va_start(ap, cmd);
+	unsigned long arg = va_arg(ap, unsigned long);
+	va_end(ap);
+	return (int)sys(SYS_fcntl, fd, cmd, arg);
+}
+
+int ioctl(int fd, unsigned long req, ...)
+{
+	va_list ap;
+	va_start(ap, req);
+	void *arg = va_arg(ap, void *);
+	va_end(ap);
+	return (int)sys(SYS_ioctl, fd, req, arg);
+}
+
+int isatty(int fd)
+{
+	unsigned char t[64]; /* struct termios */
+	long r = __sys(SYS_ioctl, fd, TCGETS, t);
+	if (r < 0) {
+		errno = r == -EBADF ? EBADF : ENOTTY;
+		return 0;
+	}
+	return 1;
+}
+
+int unlink(const char *path) { return (int)sys(SYS_unlinkat, AT_FDCWD, path, 0); }
+int unlinkat(int dirfd, const char *path, int flags) { return (int)sys(SYS_unlinkat, dirfd, path, flags); }
+int rmdir(const char *path) { return (int)sys(SYS_unlinkat, AT_FDCWD, path, AT_REMOVEDIR); }
+int rename(const char *old, const char *new) { return (int)sys(SYS_renameat, AT_FDCWD, old, AT_FDCWD, new); }
+int renameat(int od, const char *old, int nd, const char *new) { return (int)sys(SYS_renameat, od, old, nd, new); }
+
+int remove(const char *path)
+{
+	long r = __sys(SYS_unlinkat, AT_FDCWD, path, 0);
+	if (r == -EISDIR)
+		r = __sys(SYS_unlinkat, AT_FDCWD, path, AT_REMOVEDIR);
+	return (int)__syscall_ret((unsigned long)r);
+}
+
+ssize_t getrandom(void *buf, size_t n, unsigned flags) { return sys(SYS_getrandom, buf, n, flags); }
+
+/* Kernel randomness for internal use; there is no safe fallback, so a
+ * failure is fatal rather than silently weak. */
+hidden void __secure_random(void *buf, size_t len)
+{
+	unsigned char *p = buf;
+	while (len) {
+		long r = __sys(SYS_getrandom, p, len, 0);
+		if (r == -EINTR)
+			continue;
+		if (r <= 0)
+			__fatal("getrandom failed");
+		p += r;
+		len -= (size_t)r;
+	}
+}
+
+static int cwd_into(char *buf, size_t size)
+{
+	long r = sys(SYS_getcwd, buf, size);
+	if (r < 0)
+		return -1;
+	/* An unreachable directory comes back as "(unreachable)/..."; never
+	 * hand out something that is not an absolute path. */
+	if (r == 0 || buf[0] != '/') {
+		errno = ENOENT;
+		return -1;
+	}
+	return 0;
+}
+
+char *getcwd(char *buf, size_t size)
+{
+	if (buf) {
+		if (!size) {
+			errno = EINVAL;
+			return 0;
+		}
+		return cwd_into(buf, size) ? 0 : buf;
+	}
+	/* GNU extension: allocate the result. */
+	char tmp[PATH_MAX];
+	if (cwd_into(tmp, sizeof tmp))
+		return 0;
+	return strdup(tmp);
+}
+
+ssize_t readlinkat(int dirfd, const char *__restrict path, char *__restrict buf, size_t n)
+{
+	char dummy[1];
+	if (!n) {
+		/* The kernel rejects a zero size; POSIX allows it. */
+		buf = dummy;
+		n = 1;
+		long r = sys(SYS_readlinkat, dirfd, path, buf, n);
+		return r < 0 ? r : 0;
+	}
+	return sys(SYS_readlinkat, dirfd, path, buf, n);
+}
+
+ssize_t readlink(const char *__restrict path, char *__restrict buf, size_t n)
+{
+	return readlinkat(AT_FDCWD, path, buf, n);
+}
+
+/* ---- fortify entry points ---- */
+
+ssize_t __read_chk(int fd, void *buf, size_t n, size_t buflen)
+{
+	if (n > buflen)
+		__chk_fail();
+	return read(fd, buf, n);
+}
+
+ssize_t __pread_chk(int fd, void *buf, size_t n, off_t off, size_t buflen)
+{
+	if (n > buflen)
+		__chk_fail();
+	return pread(fd, buf, n, off);
+}
+
+char *__getcwd_chk(char *buf, size_t n, size_t buflen)
+{
+	if (buf && n > buflen)
+		__chk_fail();
+	return getcwd(buf, n);
+}
+
+ssize_t __readlink_chk(const char *path, char *buf, size_t n, size_t buflen)
+{
+	if (n > buflen)
+		__chk_fail();
+	return readlink(path, buf, n);
+}
