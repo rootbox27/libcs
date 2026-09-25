@@ -153,3 +153,16 @@ double log1p(double x)
 	double hi = log_core(u, &lo);
 	return hi + (lo + c / u);
 }
+
+/* log1p(x) for x > -1 finite, as hi + *lo (relative error about 2^-66) */
+hidden double __log1p_dd(double x, double *lo)
+{
+	if (fabs(x) < 0x1p-4)
+		return log1p_small(x, lo);
+	double c;
+	double u = two_sum(1.0, x, &c);
+	double l;
+	double hi = log_core(u, &l);
+	*lo = l + c / u;
+	return hi;
+}

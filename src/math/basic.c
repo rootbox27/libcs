@@ -265,8 +265,6 @@ double rint(double x)
 	return y == 0 ? copysign(0.0, x) : y;
 }
 
-static unsigned get_mxcsr(void) { unsigned m; __asm__ __volatile__("stmxcsr %0" : "=m"(m)); return m; }
-static void set_mxcsr(unsigned m) { __asm__ __volatile__("ldmxcsr %0" : : "m"(m)); }
 
 /* rint without raising inexact */
 double nearbyint(double x)
@@ -327,12 +325,17 @@ long double roundl(long double x)
 long double rintl(long double x) { __asm__("frndint" : "+t"(x)); return x; }
 long double nearbyintl(long double x)
 {
-	unsigned short sw;
+	unsigned short before, after;
+	__asm__ __volatile__("fnstsw %0" : "=m"(before));
 	long double r = rintl(x);
-	__asm__ __volatile__("fnstsw %0" : "=m"(sw));
-	/* discard a new inexact flag: clear exceptions only if none were set */
-	if (!(sw & 0x3f & ~0x20))
-		__asm__ __volatile__("fnclex");
+	__asm__ __volatile__("fnstsw %0" : "=m"(after));
+	if ((after & ~before) & 0x20) {
+		/* drop only the inexact flag this call raised */
+		struct { unsigned short cw, r1, sw, rest[11]; } env;
+		__asm__ __volatile__("fnstenv %0" : "=m"(env));
+		env.sw &= ~0x20;
+		__asm__ __volatile__("fldenv %0" : : "m"(env));
+	}
 	return r;
 }
 

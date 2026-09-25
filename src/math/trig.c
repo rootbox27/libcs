@@ -8,19 +8,20 @@
 #include "libm.h"
 #include "tables.h"
 
-typedef unsigned __int128 u128;
+#define NW 5 /* words of 2/pi used per reduction */
 
-/* x (finite, |x| >= 2^20 pi/2 or so) reduced mod pi/2 via 2/pi bits */
-static int rem_pio2_large(double x, double *y)
+/* Payne-Hanek: for x = m 2^(e - mbits + 1) (m with mbits significant bits,
+ * top bit set), x 2/pi = n + f 2^-128 - neg... precisely: returns n mod 4
+ * and sets *fp to |x 2/pi - n| in units of 2^-128 (at most 2^127) and
+ * *negp if x 2/pi - n < 0. Words of 2/pi whose products are multiples of
+ * 4 are skipped; the NW words used leave an error below 2^-190. */
+hidden int __rem_pio2_bits(uint64_t m, int mbits, int e, u128 *fp, int *negp)
 {
-	uint64_t ix = asu64(x);
-	int e = (int)(ix >> 52 & 0x7ff) - 0x3ff; /* x = m 2^(e-52) */
-	uint64_t m = (ix & ((1ULL << 52) - 1)) | (1ULL << 52);
-	/* words before k0 only contribute multiples of 4 */
-	int k0 = e > 54 ? (e - 54) / 64 : 0;
-	/* 5-word product m * (w[k0] .. w[k0+3]); acc[0] most significant */
-	uint64_t acc[5] = { 0 };
-	for (int j = 3; j >= 0; j--) {
+	int skip = e - mbits - 1;
+	int k0 = skip > 0 ? skip / 64 : 0;
+	/* (NW+1)-word product m * (w[k0] .. w[k0+NW-1]); acc[0] most significant */
+	uint64_t acc[NW + 1] = { 0 };
+	for (int j = NW - 1; j >= 0; j--) {
 		u128 p = (u128)m * two_over_pi[k0 + j];
 		/* add p at word position j (occupies acc[j], acc[j+1]) */
 		u128 lo = (u128)acc[j + 1] + (uint64_t)p;
@@ -32,31 +33,40 @@ static int rem_pio2_large(double x, double *y)
 			acc[c] = (uint64_t)hi;
 		}
 	}
-	/* The product scaled by 2^(e-52-64(k0+4)) is x*2/pi; bit position
-	 * of the binary point, counted from the least significant bit of
-	 * acc[4]: */
-	int point = 52 + 64 * (k0 + 4) - e;
-	/* extract 2 integer bits and 128 fraction bits from the 320-bit acc */
-	/* shift so that the binary point sits at bit 128 of a 192-bit window */
-	int shift = point - 128; /* bits below the window */
+	/* position of the binary point counted from bit 0 of acc[NW] */
+	int point = (mbits - 1) + 64 * (k0 + NW) - e;
+	/* a 192-bit window with the binary point at its bit 128 */
+	int shift = point - 128;
 	uint64_t win[3];
 	for (int i = 0; i < 3; i++) {
-		/* window word i (0 least significant) from bit shift + 64 i */
 		int b = shift + 64 * i;
 		int wi = b / 64, wb = b % 64;
-		uint64_t lo_w = wi < 5 ? acc[4 - wi] : 0;
-		uint64_t hi_w = wi + 1 < 5 ? acc[3 - wi] : 0;
+		uint64_t lo_w = wi <= NW ? acc[NW - wi] : 0;
+		uint64_t hi_w = wi + 1 <= NW ? acc[NW - 1 - wi] : 0;
 		win[i] = wb ? (lo_w >> wb) | (hi_w << (64 - wb)) : lo_w;
 	}
 	int n = (int)(win[2] & 3);
-	u128 f = (u128)win[1] << 64 | win[0]; /* fraction, 128 bits */
-	int neg = 0;
+	u128 f = (u128)win[1] << 64 | win[0];
+	*negp = 0;
 	if (f >> 127) {
 		/* fraction >= 1/2: round n up and use the negative remainder */
 		n++;
 		f = -f;
-		neg = 1;
+		*negp = 1;
 	}
+	*fp = f;
+	return n & 3;
+}
+
+/* x (finite, |x| >= 2^20 pi/2 or so) reduced mod pi/2 */
+static int rem_pio2_large(double x, double *y)
+{
+	uint64_t ix = asu64(x);
+	int e = (int)(ix >> 52 & 0x7ff) - 0x3ff;
+	uint64_t m = (ix & ((1ULL << 52) - 1)) | (1ULL << 52);
+	u128 f;
+	int neg;
+	int n = __rem_pio2_bits(m, 53, e, &f, &neg);
 	/* y = f 2^-128 pi/2; f 2^-128 = fh + fl with fh the top word rounded */
 	uint64_t top = (uint64_t)(f >> 64); /* <= 2^63 here, so no overflow */
 	double part = (double)top;

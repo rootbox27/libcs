@@ -6,7 +6,7 @@ for the double-precision math functions, computed with mpmath at 256 bits.
 
 Needs mpmath (pip install mpmath); only for regenerating the header."""
 import struct
-from mpmath import mp, mpf, exp, log, log1p, expm1, pi, sin, cos, tan, atan, asin, sqrt, floor, ldexp
+from mpmath import mp, mpf, exp, log, log1p, expm1, pi, sin, cos, tan, atan, asin, sqrt, floor, ldexp, sinh, tanh, asinh
 
 mp.prec = 160
 
@@ -159,15 +159,17 @@ p3t = d(pio2 - p1 - p2 - p3)
 for n, v in (("PIO2_1", p1), ("PIO2_2", p2), ("PIO2_3", p3), ("PIO2_3T", p3t)):
     print(f"#define {n} {hexd(v)}")
 print(f"#define INVPIO2 {hexd(d(2 / pi))}")
-mp.prec = 1400
-bits = int(mp.floor((2 / pi) * mpf(2) ** 1280))
+# enough words for long double arguments (exponent up to 16383)
+NW = 264
+mp.prec = 64 * NW + 200
+bits = int(mp.floor((2 / pi) * mpf(2) ** (64 * NW)))
 mp.prec = 160
 words = []
-for k in range(20):
-    words.append(int(bits >> (1280 - 64 * (k + 1))) & (2**64 - 1))
+for k in range(NW):
+    words.append(int(bits >> (64 * NW - 64 * (k + 1))) & (2**64 - 1))
 print("/* 2/pi as 64-bit words, most significant first (bits after the binary point) */")
-print("static const unsigned long long two_over_pi[20] = {")
-for i in range(0, 20, 4):
+print(f"static const unsigned long long two_over_pi[{NW}] = {{")
+for i in range(0, NW, 4):
     print("\t" + " ".join(f"0x{w:016x}ULL," for w in words[i:i + 4]))
 print("};")
 R = pi / 4 * mpf("1.01")
@@ -195,3 +197,96 @@ hi, lo = dd(pi)
 print(f"#define PI_HI {hexd(hi)}\n#define PI_LO {hexd(lo)}")
 hi, lo = dd(pi / 4)
 print(f"#define PIO4_HI {hexd(hi)}\n#define PIO4_LO {hexd(lo)}")
+
+# ---- hyperbolic, small arguments ----
+emit_consts("SINH_C", poly(lambda z: (sinh(sqrt(z)) - sqrt(z) - z * sqrt(z) / 6) / (z * z * sqrt(z)) if z != 0 else mpf(1) / 120, 0, mpf("0.2525"), 5, "sinh: (sinh x - x - x^3/6)/x^5 in z=x^2"))
+emit_consts("TANH_C", poly(lambda z: (tanh(sqrt(z)) - sqrt(z) + z * sqrt(z) / 3) / (z * z * sqrt(z)) if z != 0 else mpf(2) / 15, 0, mpf("0.3056"), 12, "tanh: (tanh x - x + x^3/3)/x^5 in z=x^2"))
+emit_consts("ASINH_C", poly(lambda z: (asinh(sqrt(z)) - sqrt(z) + z * sqrt(z) / 6) / (z * z * sqrt(z)) if z != 0 else mpf(3) / 40, 0, mpf("0.2525"), 16, "asinh: (asinh x - x + x^3/6)/x^5 in z=x^2"))
+
+# ==== long double (x87 extended, 64-bit significand) ====
+def hexl(v):
+    """mpf -> long double hex literal (round to nearest, 64 bits)."""
+    v = mpf(v)
+    if v == 0:
+        return "0.0L"
+    s = "-" if v < 0 else ""
+    v = abs(v)
+    e = int(mp.floor(mp.log(v, 2)))
+    M = int(mp.nint(v * mpf(2) ** (63 - e)))
+    if M >= 2**64:
+        M //= 2
+        e += 1
+    if M < 2**63:
+        M *= 2
+        e -= 1
+    return f"{s}0x{M:016x}p{e - 63}L"
+
+def ldv(v):
+    """value of the long double nearest v"""
+    v = mpf(v)
+    if v == 0:
+        return mpf(0)
+    e = int(mp.floor(mp.log(abs(v), 2)))
+    return mp.nint(v * mpf(2) ** (63 - e)) * mpf(2) ** (e - 63)
+
+def ddl(v):
+    hi = ldv(v)
+    return hi, ldv(mpf(v) - hi)
+
+def splitl(x, bits):
+    x = mpf(x)
+    e = int(mp.floor(mp.log(abs(x), 2)))
+    q = mpf(2) ** (e - bits + 1)
+    hi = mp.nint(x / q) * q
+    return hi, ldv(x - hi)
+
+def polyl(f, a, b, deg, name):
+    c, err = remez(f, a, b, deg)
+    print(f"/* {name}: degree {deg} on [{float(a):.6g}, {float(b):.6g}], max abs error {float(err):.3g} */")
+    return [ldv(v) for v in c]
+
+def emit_l(prefix, vals):
+    for i, v in enumerate(vals):
+        print(f"#define {prefix}{i} {hexl(v)}")
+
+mp.prec = 256
+print("/* ---- long double ---- */")
+print("#define LEXP_N 128")
+print("static const long double lexp_tab[256] = {")
+for j in range(128):
+    hi, lo = ddl(mpf(2) ** (mpf(j) / 128))
+    print(f"\t{hexl(hi)}, {hexl(lo)},")
+print("};")
+hi, lo = splitl(log(2) / 128, 43)
+print(f"#define LEXP_LN2HI_N {hexl(hi)}\n#define LEXP_LN2LO_N {hexl(lo)}")
+print(f"#define LEXP_INVLN2_N {hexl(128 / log(2))}")
+R = log(2) / 256 * mpf("1.02")
+emit_l("LEXP_C", polyl(lambda r: (exp(r) - 1 - r - r * r / 2) / r**3 if r != 0 else mpf(1) / 6, -R, R, 4, "long exp: (e^r-1-r-r^2/2)/r^3"))
+R = mpf("0.3466") * mpf("1.01")
+emit_l("LEXPM1_C", polyl(lambda r: (expm1(r) - r - r * r / 2) / r**3 if r != 0 else mpf(1) / 6, -R, R, 13, "long expm1: (e^x-1-x-x^2/2)/x^3"))
+print("/* log: c = 1 + i/128 for i in [-32, 64]; per entry invc (53 bits), -log(invc) hi, lo */")
+print("#define LLOG_I0 32")
+print("static const long double llog_tab[97 * 3] = {")
+for i in range(-32, 65):
+    invc = mpf(d(1 / (1 + mpf(i) / 128)))
+    hi, lo = ddl(-log(invc))
+    print(f"\t{hexl(invc)}, {hexl(hi)}, {hexl(lo)},")
+print("};")
+R = mpf("0.0053")
+emit_l("LLOG_C", polyl(lambda r: (log1p(r) - r + r * r / 2) / r**3 if r != 0 else mpf(1) / 3, -R, R, 7, "long log1p tail: (log1p(r)-r+r^2/2)/r^3"))
+hi, lo = splitl(log(2), 48)
+print(f"#define LLN2_HI {hexl(hi)}\n#define LLN2_LO {hexl(lo)}")
+for n, v in (("LINVLN2", 1 / log(2)), ("LINVLN10", 1 / log(10)), ("LLN2", log(2))):
+    hi, lo = ddl(v)
+    print(f"#define {n}_H {hexl(hi)}\n#define {n}_L {hexl(lo)}")
+pio2 = pi / 2
+p1, r1 = splitl(pio2, 32)
+p2, r2 = splitl(pio2 - p1, 32)
+p3, r3 = splitl(pio2 - p1 - p2, 32)
+p3t = ldv(pio2 - p1 - p2 - p3)
+for n, v in (("LPIO2_1", p1), ("LPIO2_2", p2), ("LPIO2_3", p3), ("LPIO2_3T", p3t)):
+    print(f"#define {n} {hexl(v)}")
+print(f"#define LINVPIO2 {hexl(2 / pi)}")
+for n, v in (("LPIO2", pi / 2), ("LPI", pi), ("LPIO4", pi / 4)):
+    hi, lo = ddl(v)
+    print(f"#define {n}_H {hexl(hi)}\n#define {n}_L {hexl(lo)}")

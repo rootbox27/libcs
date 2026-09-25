@@ -29,6 +29,9 @@ static inline double math_divzero(int neg) { return (neg ? -1.0 : 1.0) / opaque(
 static inline double math_oflow(int neg) { double h = opaque(0x1p769); return (neg ? -h : h) * h; }
 static inline double math_uflow(int neg) { double t = opaque(0x1p-767); return (neg ? -t : t) * t; }
 
+static inline unsigned get_mxcsr(void) { unsigned m; __asm__ __volatile__("stmxcsr %0" : "=m"(m)); return m; }
+static inline void set_mxcsr(unsigned m) { __asm__ __volatile__("ldmxcsr %0" : : "m"(m)); }
+
 static inline double sqrt_(double x) { __asm__("sqrtsd %1, %0" : "=x"(x) : "x"(x)); return x; }
 
 /* ---- double-double arithmetic ---- */
@@ -64,10 +67,12 @@ static inline double two_prod(double a, double b, double *e)
 hidden double __exp_dd(double hi, double lo, int *ok);
 hidden double __log_dd(double x, double *lo);
 hidden int __rem_pio2(double x, double *y);
+typedef unsigned __int128 u128;
+hidden int __rem_pio2_bits(uint64_t m, int mbits, int e, u128 *fp, int *negp);
 hidden double __sin_k(double x, double y);
 hidden double __cos_k(double x, double y);
 hidden double __tan_k(double x, double y, int odd);
-hidden double __expm1_core(double x);
-hidden double __log1p_core(double x);
+hidden double __exp_split(double x, double xl, double *lo, int *e);
+hidden double __log1p_dd(double x, double *lo);
 
 #endif

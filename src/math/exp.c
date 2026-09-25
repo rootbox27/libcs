@@ -181,3 +181,29 @@ double expm1(double x)
 	double u = two_sum(sh, -1.0, &ue);
 	return u + (ue + sl);
 }
+
+/* exp(x + xl) = 2^*e (hi + *lo) with hi + lo in [0.7, 1.5] and about
+ * 2^-63 relative error, for |x| <= 746 (for the hyperbolic functions). */
+hidden double __exp_split(double x, double xl, double *lo, int *e)
+{
+	long k = round_to_long(EXP_INVLN2_N * x);
+	double kd = (double)k;
+	double r1 = x - kd * EXP_LN2HI_N; /* exact */
+	double te;
+	double t = two_prod(kd, EXP_LN2LO_N, &te);
+	double rl;
+	double r = two_sum(r1, -t, &rl);
+	rl += xl - te;
+	int j = (int)(k & (N - 1));
+	*e = (int)(k >> 7);
+	double thi = exp_tab[2 * j], tlo = exp_tab[2 * j + 1];
+	double r2 = r * r;
+	/* e^(r + rl) - 1 = r + small */
+	double small = rl + rl * r + r2 * (EXP_C0 + r * EXP_C1 + r2 * (EXP_C2 + r * EXP_C3));
+	double pe;
+	double p = two_prod(thi, r, &pe);
+	double e1;
+	double hi = fast_two_sum(thi, p, &e1);
+	double l = e1 + pe + tlo + thi * small + tlo * (r + small);
+	return fast_two_sum(hi, l, lo);
+}
