@@ -42,7 +42,7 @@ int main(void)
 	CHECK(conv("NO-SUCH-CHARSET", "UTF-8", "a", 1, out, 64, 0) == -1000);
 	/* //TRANSLIT and //IGNORE */
 	size_t r;
-	CHECK(conv("ASCII//TRANSLIT", "UTF-8", u8, 10, out, 64, &r) == 7 && r == 3 && !memcmp(out, "A?EUR?", 6));
+	CHECK(conv("ASCII//TRANSLIT", "UTF-8", u8, 10, out, 64, &r) == 6 && r == 3 && !memcmp(out, "A?EUR?", 6));
 	CHECK(conv("ASCII//IGNORE", "UTF-8", u8, 10, out, 64, 0) == -EILSEQ);
 	/* E2BIG leaves the pointers at a character boundary */
 	iconv_t cd = iconv_open("UTF-8", "UTF-16LE");
