@@ -75,6 +75,8 @@ int system(const char *);
 char *realpath(const char *__restrict, char *__restrict);
 int mkstemp(char *);
 int mkostemp(char *, int);
+int mkstemps(char *, int);
+int mkostemps(char *, int, int);
 char *mkdtemp(char *);
 int getloadavg(double *, int);
 

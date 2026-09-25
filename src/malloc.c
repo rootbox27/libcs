@@ -14,6 +14,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <malloc.h>
 #include <sys/mman.h>
 
 #define MIN_ALIGN 16
@@ -150,5 +151,34 @@ int posix_memalign(void **res, size_t align, size_t n)
 		return ENOMEM;
 	}
 	*res = p;
+	return 0;
+}
+
+void *memalign(size_t align, size_t n)
+{
+	return aligned_alloc(align, n);
+}
+
+void *valloc(size_t n)
+{
+	return alloc(n, PAGE_SZ);
+}
+
+void *pvalloc(size_t n)
+{
+	if (n > SIZE_MAX - PAGE_SZ) {
+		errno = ENOMEM;
+		return 0;
+	}
+	return alloc(ROUND_UP(n ? n : 1, PAGE_SZ), PAGE_SZ);
+}
+
+size_t malloc_usable_size(void *p)
+{
+	return p ? hdr_of(p, "malloc_usable_size(): invalid pointer")->size : 0;
+}
+
+int malloc_trim(size_t pad)
+{
 	return 0;
 }
