@@ -10,55 +10,14 @@
 #include "libm.h"
 #include "tables.h"
 
-typedef long double ld;
-
-/* ---- double-long-double arithmetic (round to nearest) ---- */
-
-static inline ld two_sum_l(ld a, ld b, ld *e)
-{
-	ld s = a + b, bb = s - a;
-	*e = (a - (s - bb)) + (b - bb);
-	return s;
-}
-
-static inline ld fast_two_sum_l(ld a, ld b, ld *e)
-{
-	ld s = a + b;
-	*e = b - (s - a);
-	return s;
-}
-
-static inline ld two_prod_l(ld a, ld b, ld *e)
-{
-	const ld c = 0x1p32L + 1;
-	ld p = a * b;
-	ld ca = c * a, ah = ca - (ca - a), al = a - ah;
-	ld cb = c * b, bh = cb - (cb - b), bl = b - bh;
-	*e = ((ah * bh - p) + ah * bl + al * bh) + al * bl;
-	return p;
-}
-
-static inline int ld_exp(ld x)
-{
-	union ldbits u = { x };
-	return u.i.se & 0x7fff;
-}
-
-/* 2^n for -16382 <= n <= 16383 */
-static inline ld pow2l(int n)
-{
-	union ldbits u;
-	u.i.m = 1ULL << 63;
-	u.i.se = (uint16_t)(0x3fff + n);
-	return u.f;
-}
+#include "ld.h"
 
 static inline ld oflowl(int neg) { return math_oflow(neg); }
 static inline ld uflowl(int neg) { return math_uflow(neg); }
 static inline ld invalidl(ld x) { x = x - x; return x / x; }
 
 /* (hi + lo) 2^e rounded once, also into the subnormal range */
-static ld scale_l(ld hi, ld lo, int e)
+hidden ld __scale_l(ld hi, ld lo, int e)
 {
 	int eh = ld_exp(hi) - 0x3fff;
 	if (eh + e >= -16382) {
@@ -85,7 +44,7 @@ static ld scale_l(ld hi, ld lo, int e)
 }
 
 /* ---- exp kernel: e^(wh + wl) = 2^*e (hi + *lo), |wh| < 11500 ---- */
-static ld exp_kernel(ld wh, ld wl, ld *lo, int *e)
+hidden ld __exp_kernel_l(ld wh, ld wl, ld *lo, int *e)
 {
 	ld kd = (wh * LEXP_INVLN2_N + 0x1.8p63L) - 0x1.8p63L;
 	long k = (long)kd;
@@ -112,7 +71,7 @@ static ld exp_kernel(ld wh, ld wl, ld *lo, int *e)
 }
 
 /* ---- log kernel: log x = hi + *lo for positive finite x ---- */
-static ld log_kernel(ld x, ld *lo)
+hidden ld __log_kernel_l(ld x, ld *lo)
 {
 	union ldbits u = { x };
 	int k;
@@ -149,12 +108,12 @@ static ld log_kernel(ld x, ld *lo)
 }
 
 /* log1p(x) as hi + *lo, x > -1 finite */
-static ld log1p_kernel(ld x, ld *lo)
+hidden ld __log1p_kernel_l(ld x, ld *lo)
 {
 	ld ul;
 	ld u = two_sum_l(1.0L, x, &ul);
 	ld l;
-	ld h = log_kernel(u, &l);
+	ld h = __log_kernel_l(u, &l);
 	*lo = l + ul / u;
 	return h;
 }
@@ -171,8 +130,8 @@ ld expl(ld x)
 		return 1.0L + x;
 	ld lo;
 	int e;
-	ld hi = exp_kernel(x, 0, &lo, &e);
-	return scale_l(hi, lo, e);
+	ld hi = __exp_kernel_l(x, 0, &lo, &e);
+	return __scale_l(hi, lo, e);
 }
 
 ld exp2l(ld x)
@@ -186,14 +145,14 @@ ld exp2l(ld x)
 	ld n = rintl(x);
 	ld f = x - n; /* exact */
 	if (f == 0)
-		return scale_l(1.0L, 0, (int)n);
+		return __scale_l(1.0L, 0, (int)n);
 	ld wl;
 	ld wh = two_prod_l(f, LLN2_H, &wl);
 	wl += f * LLN2_L;
 	ld lo;
 	int e;
-	ld hi = exp_kernel(wh, wl, &lo, &e);
-	return scale_l(hi, lo, e + (int)n);
+	ld hi = __exp_kernel_l(wh, wl, &lo, &e);
+	return __scale_l(hi, lo, e + (int)n);
 }
 
 /* expm1 for |x| <= 0.3466 as hi + *lo */
@@ -225,9 +184,9 @@ ld expm1l(ld x)
 		return hi + lo;
 	}
 	int e;
-	ld hi = exp_kernel(x, 0, &lo, &e);
+	ld hi = __exp_kernel_l(x, 0, &lo, &e);
 	if (e > 70)
-		return scale_l(hi, lo, e);
+		return __scale_l(hi, lo, e);
 	ld s = pow2l(e);
 	ld ue;
 	ld u = two_sum_l(hi * s, -1.0L, &ue);
@@ -261,7 +220,7 @@ ld logl(ld x)
 	ld r, lo;
 	if (log_special(x, &r))
 		return r;
-	ld hi = log_kernel(x, &lo);
+	ld hi = __log_kernel_l(x, &lo);
 	return hi + lo;
 }
 
@@ -270,7 +229,7 @@ static ld scaled_logl(ld x, ld mh, ld ml)
 	ld r, lo;
 	if (log_special(x, &r))
 		return r;
-	ld hi = log_kernel(x, &lo);
+	ld hi = __log_kernel_l(x, &lo);
 	ld pe;
 	ld p = two_prod_l(hi, mh, &pe);
 	return p + (pe + hi * ml + lo * mh);
@@ -301,7 +260,7 @@ ld log1pl(ld x)
 	if (fabsl(x) < 0x1p-65L)
 		return x;
 	ld lo;
-	ld hi = log1p_kernel(x, &lo);
+	ld hi = __log1p_kernel_l(x, &lo);
 	return hi + lo;
 }
 
@@ -367,7 +326,7 @@ ld powl(ld x, ld y)
 		return uflowl(neg);
 	}
 	ld llo;
-	ld lhi = log_kernel(ax, &llo);
+	ld lhi = __log_kernel_l(ax, &llo);
 	ld pe;
 	ld p = two_prod_l(y, lhi, &pe);
 	ld plo = pe + y * llo;
@@ -380,12 +339,12 @@ ld powl(ld x, ld y)
 	ld wh = fast_two_sum_l(p, plo, &e1);
 	ld lo;
 	int e;
-	ld hi = exp_kernel(wh, e1, &lo, &e);
+	ld hi = __exp_kernel_l(wh, e1, &lo, &e);
 	if (neg) {
 		hi = -hi;
 		lo = -lo;
 	}
-	return scale_l(hi, lo, e);
+	return __scale_l(hi, lo, e);
 }
 
 /* ---- trigonometric ---- */
@@ -536,9 +495,9 @@ static ld exp_pm_l(ld a, ld sign)
 {
 	int e;
 	ld l;
-	ld h = exp_kernel(a, 0, &l, &e);
+	ld h = __exp_kernel_l(a, 0, &l, &e);
 	if (e > 70)
-		return scale_l(h, l, e - 1);
+		return __scale_l(h, l, e - 1);
 	ld inv = 1.0L / h;
 	ld pe;
 	ld p = two_prod_l(inv, h, &pe);
@@ -582,7 +541,7 @@ ld coshl(ld x)
 		return exp_pm_l(a, 1.0L);
 	int e;
 	ld l;
-	ld h = exp_kernel(a, 0, &l, &e);
+	ld h = __exp_kernel_l(a, 0, &l, &e);
 	ld s = pow2l(e);
 	h *= s;
 	l *= s;
@@ -627,7 +586,7 @@ ld tanhl(ld x)
 	/* (1 - u)/(1 + u), u = e^-2a */
 	int e;
 	ld l;
-	ld h = exp_kernel(-2 * a, 0, &l, &e);
+	ld h = __exp_kernel_l(-2 * a, 0, &l, &e);
 	ld s = pow2l(e);
 	ld uh = h * s, ul = l * s;
 	ld nl, dl;
@@ -640,7 +599,7 @@ ld tanhl(ld x)
 static ld log_dd2_l(ld v, ld vl)
 {
 	ld l;
-	ld h = log_kernel(v, &l);
+	ld h = __log_kernel_l(v, &l);
 	return h + (l + vl / v);
 }
 
@@ -654,7 +613,7 @@ ld asinhl(ld x)
 		return x == 0 ? x : x - x * 0x1p-70L;
 	if (a > 0x1p33L) {
 		ld l;
-		ld h = log_kernel(a, &l);
+		ld h = __log_kernel_l(a, &l);
 		ld e;
 		ld s = two_sum_l(h, LLN2_H, &e);
 		return sgn * (s + (e + l + LLN2_L));
@@ -696,7 +655,7 @@ ld acoshl(ld x)
 		return x;
 	if (x > 0x1p33L) {
 		ld l;
-		ld h = log_kernel(x, &l);
+		ld h = __log_kernel_l(x, &l);
 		ld e;
 		ld s = two_sum_l(h, LLN2_H, &e);
 		return s + (e + l + LLN2_L);
@@ -729,7 +688,7 @@ ld acoshl(ld x)
 	ld u = two_sum_l(t, s, &ue);
 	ue += sl;
 	ld l;
-	ld h = log1p_kernel(u, &l);
+	ld h = __log1p_kernel_l(u, &l);
 	return h + (l + ue / (1 + u));
 }
 
@@ -751,7 +710,7 @@ ld atanhl(ld x)
 	ld qd = two_prod_l(q, d, &qe);
 	ld ql = (((n - qd) - qe) - q * dl) / d;
 	ld l;
-	ld h = log1p_kernel(q, &l);
+	ld h = __log1p_kernel_l(q, &l);
 	return sgn * 0.5L * (h + (l + ql / (1 + q)));
 }
 
@@ -822,5 +781,5 @@ ld hypotl(ld x, ld y)
 	ld corr = (((s - hh) - he) + sl) / (2 * h);
 	if (k == 0)
 		return h + corr;
-	return scale_l(h, corr, k);
+	return __scale_l(h, corr, k);
 }

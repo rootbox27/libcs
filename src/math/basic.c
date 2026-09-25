@@ -507,9 +507,30 @@ double remainder(double x, double y)
 	return r == 0 ? copysign(0.0, x) : copysign(1.0, x) * r;
 }
 
+double remquo(double x, double y, int *quo)
+{
+	*quo = 0;
+	if (x != x || y != y || isinf(x) || y == 0)
+		return isnan(x) || isnan(y) ? x + y : math_invalid(x);
+	if (isinf(y))
+		return x;
+	unsigned q;
+	double r = fmod_core(x, y, &q);
+	double ay = fabs(y);
+	if (r > ay - r || (r == ay - r && (q & 1))) {
+		r -= ay;
+		q++;
+	}
+	int neg = (int)((asu64(x) ^ asu64(y)) >> 63);
+	int qv = (int)(q & 0x7fffffff);
+	*quo = neg ? -qv : qv;
+	return r == 0 ? copysign(0.0, x) : copysign(1.0, x) * r;
+}
+
 /* float results are exact in double */
 float fmodf(float x, float y) { return (float)fmod(x, y); }
 float remainderf(float x, float y) { return (float)remainder(x, y); }
+float remquof(float x, float y, int *quo) { return (float)remquo(x, y, quo); }
 
 long double fmodl(long double x, long double y)
 {
@@ -527,4 +548,26 @@ long double remainderl(long double x, long double y)
 		__asm__("fprem1; fnstsw %1" : "+t"(x), "=a"(sw) : "u"(y));
 	} while (sw & 0x400);
 	return x;
+}
+
+long double remquol(long double x, long double y, int *quo)
+{
+	*quo = 0;
+	if (x != x || y != y)
+		return x + y;
+	if (isinf(x) || y == 0) {
+		x = x * 0 + (y - y); /* invalid, NaN */
+		return x / x;
+	}
+	if (isinf(y))
+		return x;
+	/* fprem1 leaves the low three quotient bits in C0, C3, C1 */
+	unsigned short sw;
+	long double r = x;
+	do {
+		__asm__("fprem1; fnstsw %1" : "+t"(r), "=a"(sw) : "u"(y));
+	} while (sw & 0x400);
+	int q = (sw >> 8 & 1) << 2 | (sw >> 14 & 1) << 1 | (sw >> 9 & 1);
+	*quo = (signbit(x) != signbit(y)) ? -q : q;
+	return r;
 }

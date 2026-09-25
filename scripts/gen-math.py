@@ -203,6 +203,72 @@ emit_consts("SINH_C", poly(lambda z: (sinh(sqrt(z)) - sqrt(z) - z * sqrt(z) / 6)
 emit_consts("TANH_C", poly(lambda z: (tanh(sqrt(z)) - sqrt(z) + z * sqrt(z) / 3) / (z * z * sqrt(z)) if z != 0 else mpf(2) / 15, 0, mpf("0.3056"), 12, "tanh: (tanh x - x + x^3/3)/x^5 in z=x^2"))
 emit_consts("ASINH_C", poly(lambda z: (asinh(sqrt(z)) - sqrt(z) + z * sqrt(z) / 6) / (z * z * sqrt(z)) if z != 0 else mpf(3) / 40, 0, mpf("0.2525"), 16, "asinh: (asinh x - x + x^3/6)/x^5 in z=x^2"))
 
+# ---- erf, erfc ----
+from mpmath import erf as mp_erf, erfc as mp_erfc, loggamma, gamma as mp_gamma, euler, psi
+mp.prec = 200
+C = 2 / sqrt(pi)
+hi, lo = dd(C)
+print(f"#define ERF_C_HI {hexd(hi)}\n#define ERF_C_LO {hexd(lo)}")
+P0 = -C / 3
+hi, lo = dd(P0)
+print(f"#define ERF_P0_HI {hexd(hi)}\n#define ERF_P0_LO {hexd(lo)}")
+P1 = C / 10
+hi, lo = dd(P1)
+print(f"#define ERF_P1_HI {hexd(hi)}\n#define ERF_P1_LO {hexd(lo)}")
+emit_consts("ERF_R", poly(lambda z: (mp_erf(sqrt(z)) / sqrt(z) - C - P0 * z - P1 * z * z) / z**3 if z != 0 else -C / 42, 0, 1, 10, "erf: (erf(x)/x - C - P0 z - P1 z^2)/z^3, z = x^2"))
+# erfc(x) = e^(-x^2) w(x); on each interval w = W0 + W1 t + t^2 R(t), t = x - c
+w = lambda x: exp(x * x) * mp_erfc(x)
+edges = [1, 1.5, 2, 2.5, 3, 3.5, 4, 4.75, 5.5, 6.5, 7.75, 9.25, 11, 13.5, 16.5, 20.5, 27.5]
+degs = [12, 12, 11, 11, 10, 10, 11, 11, 11, 12, 12, 12, 13, 13, 13, 15]
+print(f"#define ERFC_NINT {len(degs)}")
+print("static const double erfc_edges[] = {" + ", ".join(hexd(e) for e in edges) + "};")
+rows = []
+maxdeg = max(degs)
+for (a, b), deg in zip(zip(edges, edges[1:]), degs):
+    c = (mpf(a) + mpf(b)) / 2
+    h = (mpf(b) - mpf(a)) / 2
+    W0 = w(c)
+    W1 = 2 * c * W0 - C
+    W2 = (2 * W0 + 2 * c * W1) / 2
+    f = lambda t: (w(c + t) - W0 - W1 * t) / t**2 if t != 0 else W2
+    cc, err = remez(f, -h, h, deg)
+    print(f"/* erfc [{a}, {b}]: degree {deg}, relative error {float(err * h * h / w(mpf(b))):.3g} */")
+    w0h, w0l = dd(W0)
+    w1h, w1l = dd(W1)
+    coefs = [d(v) for v in cc] + [0.0] * (maxdeg - deg)
+    rows.append([d(c), w0h, w0l, w1h, w1l, float(deg)] + coefs)
+print(f"#define ERFC_ROW {6 + maxdeg + 1}")
+print("/* per interval: centre, W0 hi, lo, W1 hi, lo, degree, R coefficients */")
+print(f"static const double erfc_tab[{len(rows)} * {6 + maxdeg + 1}] = {{")
+for r in rows:
+    print("\t" + ", ".join(hexd(v) for v in r) + ",")
+print("};")
+
+# ---- lgamma, tgamma ----
+C0 = 1 - euler
+hi, lo = dd(C0)
+print(f"#define LGAM_C0_HI {hexd(hi)}\n#define LGAM_C0_LO {hexd(lo)}")
+lgq, err = remez(lambda t: (loggamma(2 + t) / t - C0) / t if t != 0 else psi(1, 2) / 2, mpf(-0.5), mpf(0.5), 20)
+print(f"/* lgamma(2+t) = t (C0 + t Q(t)): degree 20 on [-0.5, 0.5], max abs error {float(err):.3g} */")
+emit_consts("LGAM_Q", [d(v) for v in lgq])
+for k in (0, 1):  # these two are applied as double-doubles
+    print(f"#define LGAM_Q{k}_LO {hexd(d(lgq[k] - mpf(d(lgq[k]))))}")
+G0 = mp_gamma(mpf(2.5))
+G1 = G0 * psi(0, mpf(2.5))
+for n, v in (("TGAM_G0", G0), ("TGAM_G1", G1)):
+    hi, lo = dd(v)
+    print(f"#define {n}_HI {hexd(hi)}\n#define {n}_LO {hexd(lo)}")
+emit_consts("TGAM_R", poly(lambda t: (mp_gamma(mpf(2.5) + t) - G0 - G1 * t) / t**2 if t != 0 else G0 * (psi(0, mpf(2.5))**2 + psi(1, mpf(2.5))) / 2, -0.5, 0.5, 18, "gamma(2.5+t) = G0 + G1 t + t^2 R(t)"))
+def stirT(v):
+    if v == 0:
+        return mpf(1) / 12
+    x = 1 / sqrt(v)
+    return (loggamma(x) - ((x - mpf(1) / 2) * log(x) - x + log(2 * pi) / 2)) * x
+emit_consts("STIR_T", poly(stirT, 0, mpf(1) / 144, 5, "Stirling: lgamma(x) - ((x-1/2)log x - x + log(2pi)/2) = T(1/x^2)/x, x >= 12"))
+for n, v in (("HLOG2PI", log(2 * pi) / 2), ("LOGPI", log(pi))):
+    hi, lo = dd(v)
+    print(f"#define {n}_HI {hexd(hi)}\n#define {n}_LO {hexd(lo)}")
+
 # ==== long double (x87 extended, 64-bit significand) ====
 def hexl(v):
     """mpf -> long double hex literal (round to nearest, 64 bits)."""
@@ -288,5 +354,53 @@ for n, v in (("LPIO2_1", p1), ("LPIO2_2", p2), ("LPIO2_3", p3), ("LPIO2_3T", p3t
     print(f"#define {n} {hexl(v)}")
 print(f"#define LINVPIO2 {hexl(2 / pi)}")
 for n, v in (("LPIO2", pi / 2), ("LPI", pi), ("LPIO4", pi / 4)):
+    hi, lo = ddl(v)
+    print(f"#define {n}_H {hexl(hi)}\n#define {n}_L {hexl(lo)}")
+
+# ---- long double erf, erfc ----
+mp.prec = 256
+hi, lo = ddl(C)
+print(f"#define LERF_C_H {hexl(hi)}\n#define LERF_C_L {hexl(lo)}")
+hi, lo = ddl(P0)
+print(f"#define LERF_P0_H {hexl(hi)}\n#define LERF_P0_L {hexl(lo)}")
+hi, lo = ddl(P1)
+print(f"#define LERF_P1_H {hexl(hi)}\n#define LERF_P1_L {hexl(lo)}")
+emit_l("LERF_R", polyl(lambda z: (mp_erf(sqrt(z)) / sqrt(z) - C - P0 * z - P1 * z * z) / z**3 if z != 0 else -C / 42, 0, 1, 13, "long erf: (erf(x)/x - C - P0 z - P1 z^2)/z^3"))
+ldegs = [15, 15, 14, 14, 13, 13, 14, 14, 14, 15, 15, 15, 16, 16, 16, 18]
+lmax = max(ldegs)
+lrows = []
+for (a, b), deg in zip(zip(edges, edges[1:]), ldegs):
+    c = (mpf(a) + mpf(b)) / 2
+    h = (mpf(b) - mpf(a)) / 2
+    W0 = w(c)
+    W1 = 2 * c * W0 - C
+    W2 = (2 * W0 + 2 * c * W1) / 2
+    f = lambda t: (w(c + t) - W0 - W1 * t) / t**2 if t != 0 else W2
+    cc, err = remez(f, -h, h, deg)
+    print(f"/* long erfc [{a}, {b}]: degree {deg}, relative error {float(err * h * h / w(mpf(b))):.3g} */")
+    w0h, w0l = ddl(W0)
+    w1h, w1l = ddl(W1)
+    coefs = [ldv(v) for v in cc] + [mpf(0)] * (lmax - deg)
+    lrows.append([ldv(c), w0h, w0l, w1h, w1l, mpf(deg)] + coefs)
+print(f"#define LERFC_ROW {6 + lmax + 1}")
+print(f"static const long double lerfc_tab[{len(lrows)} * {6 + lmax + 1}] = {{")
+for r in lrows:
+    print("\t" + ", ".join(hexl(v) for v in r) + ",")
+print("};")
+
+# ---- long double lgamma, tgamma ----
+hi, lo = ddl(C0)
+print(f"#define LLGAM_C0_H {hexl(hi)}\n#define LLGAM_C0_L {hexl(lo)}")
+llgq, err = remez(lambda t: (loggamma(2 + t) / t - C0) / t if t != 0 else psi(1, 2) / 2, mpf(-0.5), mpf(0.5), 24)
+print(f"/* long lgamma(2+t) = t (C0 + t Q(t)): degree 24 on [-0.5, 0.5], max abs error {float(err):.3g} */")
+emit_l("LLGAM_Q", [ldv(v) for v in llgq])
+for k in (0, 1):
+    print(f"#define LLGAM_Q{k}_L {hexl(ldv(llgq[k] - ldv(llgq[k])))}")
+for n, v in (("LTGAM_G0", G0), ("LTGAM_G1", G1)):
+    hi, lo = ddl(v)
+    print(f"#define {n}_H {hexl(hi)}\n#define {n}_L {hexl(lo)}")
+emit_l("LTGAM_R", polyl(lambda t: (mp_gamma(mpf(2.5) + t) - G0 - G1 * t) / t**2 if t != 0 else G0 * (psi(0, mpf(2.5))**2 + psi(1, mpf(2.5))) / 2, -0.5, 0.5, 22, "long gamma(2.5+t) = G0 + G1 t + t^2 R(t)"))
+emit_l("LSTIR_T", polyl(stirT, 0, mpf(1) / 256, 6, "long Stirling, x >= 16: T(1/x^2)/x"))
+for n, v in (("LHLOG2PI", log(2 * pi) / 2), ("LLOGPI", log(pi)), ("LPI2", pi)):
     hi, lo = ddl(v)
     print(f"#define {n}_H {hexl(hi)}\n#define {n}_L {hexl(lo)}")

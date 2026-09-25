@@ -500,6 +500,123 @@ static const unsigned long long two_over_pi[264] = {
 #define ASINH_C14 0x1.ad0280f1dbee6p-9
 #define ASINH_C15 -0x1.ec2e7e6ddc5d2p-10
 #define ASINH_C16 0x1.3033471955dafp-11
+#define ERF_C_HI 0x1.20dd750429b6dp+0
+#define ERF_C_LO 0x1.1ae3a914fed80p-56
+#define ERF_P0_HI -0x1.812746b0379e7p-2
+#define ERF_P0_LO 0x1.ee12e49cab700p-57
+#define ERF_P1_HI 0x1.ce2f21a042be2p-4
+#define ERF_P1_LO -0x1.2871bc5e00766p-58
+/* erf: (erf(x)/x - C - P0 z - P1 z^2)/z^3, z = x^2: degree 10 on [0, 1], max abs error 1.47e-19 */
+#define ERF_R0 -0x1.b82ce31288b51p-6
+#define ERF_R1 0x1.565bcd0e6a516p-8
+#define ERF_R2 -0x1.c02db4003d7a3p-11
+#define ERF_R3 0x1.f9a326f8215b2p-14
+#define ERF_R4 -0x1.f4d25bd7818c2p-17
+#define ERF_R5 0x1.b9e6bac77a43ap-20
+#define ERF_R6 -0x1.5f72cbfd6713ap-23
+#define ERF_R7 0x1.fc9b6bad654a7p-27
+#define ERF_R8 -0x1.503b14dcb4ad2p-30
+#define ERF_R9 0x1.8a8f5eeda1fbbp-34
+#define ERF_R10 -0x1.4932b92a202c2p-38
+#define ERFC_NINT 16
+static const double erfc_edges[] = {0x1.0000000000000p+0, 0x1.8000000000000p+0, 0x1.0000000000000p+1, 0x1.4000000000000p+1, 0x1.8000000000000p+1, 0x1.c000000000000p+1, 0x1.0000000000000p+2, 0x1.3000000000000p+2, 0x1.6000000000000p+2, 0x1.a000000000000p+2, 0x1.f000000000000p+2, 0x1.2800000000000p+3, 0x1.6000000000000p+3, 0x1.b000000000000p+3, 0x1.0800000000000p+4, 0x1.4800000000000p+4, 0x1.b800000000000p+4};
+/* erfc [1, 1.5]: degree 12, relative error 9.91e-20 */
+/* erfc [1.5, 2]: degree 12, relative error 1.46e-20 */
+/* erfc [2, 2.5]: degree 11, relative error 8.1e-20 */
+/* erfc [2.5, 3]: degree 11, relative error 1.68e-20 */
+/* erfc [3, 3.5]: degree 10, relative error 1.49e-19 */
+/* erfc [3.5, 4]: degree 10, relative error 4.13e-20 */
+/* erfc [4, 4.75]: degree 11, relative error 6.27e-20 */
+/* erfc [4.75, 5.5]: degree 11, relative error 1.12e-20 */
+/* erfc [5.5, 6.5]: degree 11, relative error 1.06e-19 */
+/* erfc [6.5, 7.75]: degree 12, relative error 1.21e-20 */
+/* erfc [7.75, 9.25]: degree 12, relative error 1.8e-20 */
+/* erfc [9.25, 11]: degree 12, relative error 1.66e-20 */
+/* erfc [11, 13.5]: degree 13, relative error 1.2e-20 */
+/* erfc [13.5, 16.5]: degree 13, relative error 1.01e-20 */
+/* erfc [16.5, 20.5]: degree 13, relative error 3.98e-20 */
+/* erfc [20.5, 27.5]: degree 15, relative error 2.92e-20 */
+#define ERFC_ROW 22
+/* per interval: centre, W0 hi, lo, W1 hi, lo, degree, R coefficients */
+static const double erfc_tab[16 * 22] = {
+	0x1.4000000000000p+0, 0x1.78a692138767ap-2, 0x1.4797400f19192p-63, -0x1.abaacdbfa8b07p-3, 0x1.d7049656994b0p-57, 0x1.8000000000000p+3, 0x1.b56f45eef7e58p-4, -0x1.9b635ac624ad1p-5, 0x1.68a25a6641f18p-6, -0x1.299636d6c733fp-7, 0x1.d1b695aac2245p-9, -0x1.5b8bc945b86b8p-10, 0x1.f0fe6fa5560d0p-12, -0x1.55c0888b707cbp-13, 0x1.c5704b3cfc5cfp-15, -0x1.22f2c27d46a2fp-16, 0x1.6a0a2c5ab3831p-18, -0x1.bd4e30557aba0p-20, 0x1.0661ccb56654bp-21, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0,
+	0x1.c000000000000p+0, 0x1.23cfc2f1dc7e0p-2, 0x1.3b1040eb318c2p-57, -0x1.0c3d538446447p-3, -0x1.e70e6ef2d0458p-57, 0x1.8000000000000p+3, 0x1.c8d0cef0f810dp-5, -0x1.6cb52fe48945ep-6, 0x1.13648a11ffe70p-7, -0x1.8bf716a8eb85fp-9, 0x1.106bd5c04487ap-10, -0x1.683888479aa21p-12, 0x1.cb4c687728d19p-14, -0x1.1b291820e06afp-15, 0x1.5273fc8bcd98bp-17, -0x1.88f25201335adp-19, 0x1.bc03a7f3cfc4fp-21, -0x1.f0309c0c5783ap-23, 0x1.0b2435603aa47p-24, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0,
+	0x1.2000000000000p+1, 0x1.d94446d627932p-3, -0x1.a8198a8216449p-58, -0x1.6a70d2bb37411p-4, 0x1.ffe6c62a06b85p-62, 0x1.6000000000000p+3, 0x1.0615670e25a7bp-5, -0x1.6883f9919a179p-7, 0x1.da595561f8007p-9, -0x1.2bd251bb2f5b4p-10, 0x1.6d7743d2aaa05p-12, -0x1.aed7ebc729194p-14, 0x1.ec77412e45389p-16, -0x1.117a6a2f36d0fp-17, 0x1.27ab06d42431ep-19, -0x1.37b3e3e7453d0p-21, 0x1.44a8b30a11659p-23, -0x1.4739c0be965ebp-25, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0,
+	0x1.6000000000000p+1, 0x1.8c9eb68ff27d7p-3, -0x1.bb4e763c64a35p-57, -0x1.0305781330099p-4, 0x1.10248e2763374p-59, 0x1.6000000000000p+3, 0x1.43b98bac83823p-6, -0x1.84e9ab30e6ab3p-8, 0x1.c2c72fd72773cp-10, -0x1.f99e41ecb0c9bp-12, 0x1.131bb160c89c7p-13, -0x1.2312b2589bbdcp-15, 0x1.2bfb5c9a24fdfp-17, -0x1.2da32c39165e3p-19, 0x1.285400d304815p-21, -0x1.1ccbe10c41f2dp-23, 0x1.0eb9ebe70a06ep-25, -0x1.f442b2c2109aep-28, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0,
+	0x1.a000000000000p+1, 0x1.54a7a08d4bb45p-3, -0x1.6a0d91336bdc9p-61, -0x1.82a8522b868a1p-5, 0x1.b91956c8f3f36p-60, 0x1.4000000000000p+3, 0x1.a7eddc9ee6425p-7, -0x1.c24b49c47a2e9p-9, 0x1.d085857a17fe0p-11, -0x1.d25ebba195caap-13, 0x1.c882f023131e5p-15, -0x1.b45d036573cd7p-17, 0x1.97dd7a78e159ep-19, -0x1.753a556028d84p-21, 0x1.4ebdbb414163ap-23, -0x1.28e142392b97cp-25, 0x1.00c9c93503e77p-27, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0,
+	0x1.e000000000000p+1, 0x1.2a2af19c14930p-3, -0x1.fa04a06a33f29p-57, -0x1.2aa6503acda11p-5, -0x1.1d40a8d069620p-62, 0x1.4000000000000p+3, 0x1.22f0664f3cbf9p-7, -0x1.1434ae05873b4p-9, 0x1.fff032a0df8d8p-12, -0x1.cfcdea1b0869bp-14, 0x1.9b50d0d22eeb3p-16, -0x1.65778b2d85417p-18, 0x1.30c2fbfd428adp-20, -0x1.fe3be899a214cp-23, 0x1.a3bc501ee0062p-25, -0x1.55de5fc689f5fp-27, 0x1.10744fff492c1p-29, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0,
+	0x1.1800000000000p+2, 0x1.01afcc22e71b8p-3, 0x1.fef1f095792a8p-60, -0x1.c14b6f7f3c2f0p-6, -0x1.bbacc1a04a60bp-63, 0x1.6000000000000p+3, 0x1.7f51652a46399p-8, -0x1.406f090aa4007p-10, 0x1.06bf9a3516e74p-12, -0x1.a712d1a0f4ebep-15, 0x1.4eb8a60a259eap-17, -0x1.0471a4a4bec97p-19, 0x1.8ee2d456decabp-22, -0x1.2cd28d98e0f82p-24, 0x1.bf150deb8f89dp-27, -0x1.47930ef1bef6fp-29, 0x1.dfe634a0fb6ccp-32, -0x1.56f39136bca4dp-34, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0,
+	0x1.4800000000000p+2, 0x1.bac6ca42e1bfbp-4, 0x1.409abadf6e0f9p-59, -0x1.4d86dc544600bp-6, -0x1.d69a6b9d40b5dp-68, 0x1.6000000000000p+3, 0x1.ee3ffedd01da2p-9, -0x1.687d168ebc145p-11, 0x1.02fdcfb10709ep-13, -0x1.6ecb6c3227fb5p-16, 0x1.002544092da31p-18, -0x1.60fd0959591d4p-21, 0x1.e032a3a35a073p-24, -0x1.4292860dabcbbp-26, 0x1.ac273c7ac3118p-29, -0x1.18d9b346aedb5p-31, 0x1.7043207de3d9ep-34, -0x1.d92f36105356fp-37, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0,
+	0x1.8000000000000p+2, 0x1.7c0348489d721p-4, 0x1.ca9cebb9a1c44p-58, -0x1.ed7f66d9d09fep-7, 0x1.3cc685f99d325p-62, 0x1.6000000000000p+3, 0x1.3c7764a81f462p-9, -0x1.9106a7cd79e3ap-12, 0x1.f64cd9c07bcbap-15, -0x1.370d0641783a8p-17, 0x1.7d0e03eb7c045p-20, -0x1.cde4cec6c7ffep-23, 0x1.15134b4f2bc31p-25, -0x1.491bba37ce6e6p-28, 0x1.8317151387b99p-31, -0x1.c3047e377dd77p-34, 0x1.085f0f4938685p-36, -0x1.2f25710d74b1cp-39, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0,
+	0x1.c800000000000p+2, 0x1.413c3b2dcd435p-4, -0x1.5144f5fe7611bp-59, -0x1.61e827af73702p-7, 0x1.8b3017b7db105p-61, 0x1.8000000000000p+3, 0x1.825df5629cdd9p-10, -0x1.a214309a9f1fcp-13, 0x1.c07f431ce4a6cp-16, -0x1.dd15aee38e2dfp-19, 0x1.f754478500553p-22, -0x1.07611d29e31b0p-24, 0x1.117a5c42ad1bbp-27, -0x1.19c91893f486fp-30, 0x1.202a443682f3fp-33, -0x1.247a1c55f6e8ep-36, 0x1.26be8c5db7e27p-39, -0x1.2cd048bd28f28p-42, 0x1.2bbdd266e10b6p-45, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0,
+	0x1.1000000000000p+3, 0x1.0e078051f491dp-4, 0x1.52f3784168bc7p-62, -0x1.f57cad15dbe3cp-8, -0x1.b5fa473e0bddbp-65, 0x1.8000000000000p+3, 0x1.cea22f2be068fp-11, -0x1.a80f2934e8b57p-14, 0x1.82426c7524fe8p-17, -0x1.5da898d825bfap-20, 0x1.3a9b814a994eep-23, -0x1.19623f775d649p-26, 0x1.f463ba75eed8fp-30, -0x1.ba5d033296f9fp-33, 0x1.84d9945c87977p-36, -0x1.53d7f0d11fad0p-39, 0x1.276ae4e530efcp-42, -0x1.04ed1157f8ca4p-45, 0x1.c2266daa34b38p-49, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0,
+	0x1.4400000000000p+3, 0x1.c648970cc38a0p-5, -0x1.a59d3b4891bc6p-60, -0x1.63856e15f97f3p-8, -0x1.faa0735d29892p-66, 0x1.8000000000000p+3, 0x1.14edee3cf140dp-11, -0x1.ad6edaf2b860cp-15, 0x1.4b71ebd624df3p-18, -0x1.fd55b189f3dd0p-22, 0x1.859d94cf138a4p-25, -0x1.28bb83adb8493p-28, 0x1.c20843aabbe69p-32, -0x1.53cf441739b8fp-35, 0x1.ff00c09ab1ec0p-39, -0x1.7e8d60388d110p-42, 0x1.1d3ec93e87521p-45, -0x1.b0dfb87387c0ep-49, 0x1.412b2fdc22a10p-52, 0x0.0p+0, 0x0.0p+0, 0x0.0p+0,
+	0x1.8800000000000p+3, 0x1.780c6345b4de9p-5, -0x1.3cfb854fdd89bp-59, -0x1.e7f2059678dd5p-9, 0x1.2d0753355924ep-63, 0x1.a000000000000p+3, 0x1.3b8b7f402a8ebp-12, -0x1.96ce3ebd3b987p-16, 0x1.0565cdd23b7ddp-19, -0x1.4edf1d767efdcp-23, 0x1.aba91680dbdbbp-27, -0x1.103c9ad908adfp-30, 0x1.59892c5d8d17cp-34, -0x1.b53d7cfaec426p-38, 0x1.13cf73aed6258p-41, -0x1.5aec82ae409f9p-45, 0x1.b2e36208e3bf3p-49, -0x1.0fdca362e640ep-52, 0x1.5e8d118a43483p-56, -0x1.b5c7db80a6c8fp-60, 0x0.0p+0, 0x0.0p+0,
+	0x1.e000000000000p+3, 0x1.33714a024097ep-5, 0x1.f3b4d0ae3b609p-59, -0x1.467f441a50cf9p-9, -0x1.fb350f405bb88p-65, 0x1.a000000000000p+3, 0x1.59fa2994d54efp-13, -0x1.6dd369db39094p-17, 0x1.81fb2ba7eb202p-21, -0x1.96605f1ea2e8ep-25, 0x1.aaf0d3bb8e6d8p-29, -0x1.bf9951f9543d4p-33, 0x1.d445b8360d334p-37, -0x1.e8e11c0774dfbp-41, 0x1.fd564bc66adf6p-45, -0x1.08c75c6b0c79fp-48, 0x1.129b21e6583dcp-52, -0x1.1c4d5aa964a85p-56, 0x1.2fbfa3f46f838p-60, -0x1.3aad016c34015p-64, 0x0.0p+0, 0x0.0p+0,
+	0x1.2800000000000p+4, 0x1.f2ee84766fae7p-6, 0x1.7250bd178780dp-60, -0x1.ae41bec497d41p-10, 0x1.770c316a81ea4p-64, 0x1.a000000000000p+3, 0x1.727fe320214a1p-14, -0x1.3e956fa0e4453p-18, 0x1.118d070cacfdfp-22, -0x1.d5192e9691c26p-27, 0x1.91a56915fcd8dp-31, -0x1.57684f44a6b41p-35, 0x1.25335b6547883p-39, -0x1.f3f79fbd2c2c9p-44, 0x1.a9ae646231523p-48, -0x1.69edc5fa7ba5fp-52, 0x1.331abc4fca135p-56, -0x1.0455e0c7865fdp-60, 0x1.cae093b8bcdfcp-65, -0x1.86257da4a3906p-69, 0x0.0p+0, 0x0.0p+0,
+	0x1.8000000000000p+4, 0x1.80d1e88d3c620p-6, -0x1.8f9595af81aacp-67, -0x1.001a68f1b5449p-10, -0x1.04aa5c6f87f8dp-66, 0x1.e000000000000p+3, 0x1.54964558f64cep-15, -0x1.c48d27f6c7d0ap-20, 0x1.2c675fe0705d7p-24, -0x1.8e79b8190687fp-29, 0x1.080e891cf90f4p-33, -0x1.5daa87b95dc8ap-38, 0x1.cea351f5d3322p-43, -0x1.31cbb2640dcaep-47, 0x1.93e8f0bdb76d5p-52, -0x1.0a87075b0f50ep-56, 0x1.5f783d25ce1dcp-61, -0x1.cf152218cbeb2p-66, 0x1.2fe14f9ecae09p-70, -0x1.8f5a6c090bf04p-75, 0x1.1e41cf5be0991p-79, -0x1.7bc5dc539d731p-84,
+};
+#define LGAM_C0_HI 0x1.b0ee6072093cep-2
+#define LGAM_C0_LO 0x1.6cb90701fbfabp-58
+/* lgamma(2+t) = t (C0 + t Q(t)): degree 20 on [-0.5, 0.5], max abs error 3.36e-21 */
+#define LGAM_Q0 0x1.4a34cc4a60fa6p-2
+#define LGAM_Q1 -0x1.13e001a557606p-4
+#define LGAM_Q2 0x1.51322ac7d8483p-6
+#define LGAM_Q3 -0x1.e404fc218f620p-8
+#define LGAM_Q4 0x1.7add6eadb6d20p-9
+#define LGAM_Q5 -0x1.38ac5c2bf5013p-10
+#define LGAM_Q6 0x1.0b36af862be95p-11
+#define LGAM_Q7 -0x1.d3fd4c7b985c9p-13
+#define LGAM_Q8 0x1.a127b0fe08b5ep-14
+#define LGAM_Q9 -0x1.78de5a3ac095fp-15
+#define LGAM_Q10 0x1.580dcb7e49181p-16
+#define LGAM_Q11 -0x1.3cbcea0694e7bp-17
+#define LGAM_Q12 0x1.2598379a59008p-18
+#define LGAM_Q13 -0x1.11a84d035ca54p-19
+#define LGAM_Q14 0x1.0054acbd454d1p-20
+#define LGAM_Q15 -0x1.e410abe2a7de9p-22
+#define LGAM_Q16 0x1.c9ac5c1883280p-23
+#define LGAM_Q17 -0x1.9a7c9510802cfp-24
+#define LGAM_Q18 0x1.80f49e3dc07c7p-25
+#define LGAM_Q19 -0x1.092430ab9d687p-25
+#define LGAM_Q0_LO 0x1.1877a6231a813p-56
+#define LGAM_Q1_LO -0x1.fa81ac58e2d11p-58
+#define LGAM_Q20 0x1.04fdb4c8c3b66p-26
+#define TGAM_G0_HI 0x1.544fa6d47b390p+0
+#define TGAM_G0_LO -0x1.2569de13afcdbp-59
+#define TGAM_G1_HI 0x1.de9585f1a7093p-1
+#define TGAM_G1_LO 0x1.2e0c1c1880a4dp-55
+/* gamma(2.5+t) = G0 + G1 t + t^2 R(t): degree 18 on [-0.5, 0.5], max abs error 1.6e-20 */
+#define TGAM_R0 0x1.4f224d4b7e01cp-1
+#define TGAM_R1 0x1.03f6d2fa4f4f9p-2
+#define TGAM_R2 0x1.c138b89492c57p-4
+#define TGAM_R3 0x1.d0a9bc49352e2p-6
+#define TGAM_R4 0x1.5489cc6ba9df7p-7
+#define TGAM_R5 0x1.a55ed20e6c579p-10
+#define TGAM_R6 0x1.8b8fcdab9e398p-11
+#define TGAM_R7 0x1.08875da0bacb7p-18
+#define TGAM_R8 0x1.013c8f1c86a8fp-14
+#define TGAM_R9 -0x1.ad8d6adb259e4p-17
+#define TGAM_R10 0x1.e6cceeba976aap-18
+#define TGAM_R11 -0x1.579f691064f74p-19
+#define TGAM_R12 0x1.227a2214df62ap-20
+#define TGAM_R13 -0x1.c91244198585cp-22
+#define TGAM_R14 0x1.70cc781608d45p-23
+#define TGAM_R15 -0x1.2113987afd980p-24
+#define TGAM_R16 0x1.cd122f74e3d88p-26
+#define TGAM_R17 -0x1.c9b4712adbefcp-27
+#define TGAM_R18 0x1.75da590b85601p-28
+/* Stirling: lgamma(x) - ((x-1/2)log x - x + log(2pi)/2) = T(1/x^2)/x, x >= 12: degree 5 on [0, 0.00694444], max abs error 3.15e-19 */
+#define STIR_T0 0x1.5555555555555p-4
+#define STIR_T1 -0x1.6c16c16c14e86p-9
+#define STIR_T2 0x1.a01a016f527cap-11
+#define STIR_T3 -0x1.38130b5029e69p-11
+#define STIR_T4 0x1.b8d0976f41772p-11
+#define STIR_T5 -0x1.d5acf317dd8c2p-10
+#define HLOG2PI_HI 0x1.d67f1c864beb5p-1
+#define HLOG2PI_LO -0x1.65b5a1b7ff5dfp-55
+#define LOGPI_HI 0x1.250d048e7a1bdp+0
+#define LOGPI_LO 0x1.7abf2ad8d5088p-57
 /* ---- long double ---- */
 #define LEXP_N 128
 static const long double lexp_tab[256] = {

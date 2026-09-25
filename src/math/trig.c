@@ -117,7 +117,7 @@ hidden int __rem_pio2(double x, double *y)
 }
 
 /* sin(x + y), |x| <= pi/4, |y| tiny */
-hidden double __sin_k(double x, double y)
+hidden double __sin_kdd(double x, double y, double *lo)
 {
 	double ze;
 	double z = two_prod(x, x, &ze);
@@ -132,11 +132,18 @@ hidden double __sin_k(double x, double y)
 	double e1;
 	double hi = fast_two_sum(x, t0, &e1);
 	/* + y cos x */
-	return hi + (e1 + t0e + rest + y * (1 - 0.5 * z + z * z * (1.0 / 24)));
+	return fast_two_sum(hi, e1 + t0e + rest + y * (1 - 0.5 * z + z * z * (1.0 / 24)), lo);
+}
+
+hidden double __sin_k(double x, double y)
+{
+	double lo;
+	double hi = __sin_kdd(x, y, &lo);
+	return hi + lo;
 }
 
 /* cos(x + y), |x| <= pi/4, |y| tiny */
-hidden double __cos_k(double x, double y)
+hidden double __cos_kdd(double x, double y, double *lop)
 {
 	double ze;
 	double z = two_prod(x, x, &ze);
@@ -154,7 +161,14 @@ hidden double __cos_k(double x, double y)
 	double e;
 	double hi = fast_two_sum(w, t, &e);
 	/* - y sin x */
-	return hi + (lo + e + te + rest - y * (x - x * z * (1.0 / 6)));
+	return fast_two_sum(hi, lo + e + te + rest - y * (x - x * z * (1.0 / 6)), lop);
+}
+
+hidden double __cos_k(double x, double y)
+{
+	double lo;
+	double hi = __cos_kdd(x, y, &lo);
+	return hi + lo;
 }
 
 /* tan(x + y) for |x| <= pi/4 as hi + *lo */

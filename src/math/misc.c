@@ -37,7 +37,7 @@ double cbrt(double x)
 
 /* (hi + lo) 2^k rounded once, also when the result is subnormal;
  * hi + lo must be normal and at least 2^-1000 or so. */
-static double scale_dd(double hi, double lo, int k)
+hidden double __scale_dd(double hi, double lo, int k)
 {
 	double y = hi + lo;
 	int e = (int)(asu64(y) >> 52 & 0x7ff) - 0x3ff;
@@ -95,7 +95,7 @@ double hypot(double x, double y)
 	double corr = (((s - hh) - he) + sl) / (2 * h);
 	if (k == 0)
 		return h + corr;
-	return scale_dd(h, corr, k);
+	return __scale_dd(h, corr, k);
 }
 
 /* ---- fused multiply-add ---- */
