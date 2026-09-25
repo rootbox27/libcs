@@ -9,7 +9,11 @@
  * Cancellation is acted on at pthread_testcancel, pthread_join, the
  * condition variable waits and the sleep functions, or at once in
  * asynchronous mode. It is requested with signal 32, which the library
- * reserves; signals not sent from inside the process are ignored. */
+ * reserves; signals not sent from inside the process are ignored.
+ *
+ * Live threads are kept on a list so that set*id calls can be applied to
+ * every thread (Linux credentials are per thread; see __setxid). A thread
+ * leaves the list before it blocks signals on its way out. */
 #include "internal.h"
 #include <errno.h>
 #include <limits.h>
@@ -25,6 +29,7 @@
 #include <fcntl.h>
 
 #define SIGCANCEL 32
+#define SIGSETXID 33
 #define DEFAULT_STACK (2u << 20)
 #define MIN_STACK 16384
 #define DTOR_ITERATIONS 4
@@ -160,6 +165,110 @@ int pthread_attr_setdetachstate(pthread_attr_t *a, int d)
 }
 int pthread_attr_getdetachstate(const pthread_attr_t *a, int *d) { *d = a->__detach; return 0; }
 
+/* ---- the list of live threads ---- */
+
+static volatile int list_lock;
+
+hidden long __setxid(long nr, long a, long b, long c);
+hidden void __thread_list_lock(void);
+hidden void __thread_list_unlock(void);
+hidden void __thread_list_fork_child(void);
+
+/* call with list_lock held */
+static void list_add(struct pthread *p)
+{
+	struct pthread *m = __self();
+	if (!m->next)
+		m->next = m->prev = m;
+	p->next = m->next;
+	p->prev = m;
+	m->next->prev = p;
+	m->next = p;
+}
+
+static void list_del(struct pthread *p)
+{
+	if (!p->next)
+		return;
+	p->prev->next = p->next;
+	p->next->prev = p->prev;
+	p->next = p->prev = 0;
+}
+
+hidden void __thread_list_lock(void) { __lock(&list_lock); }
+hidden void __thread_list_unlock(void) { __unlock(&list_lock); }
+
+/* in a fork child: we are the only thread */
+hidden void __thread_list_fork_child(void)
+{
+	struct pthread *self = __self();
+	self->next = self->prev = 0;
+	list_lock = 0;
+}
+
+/* ---- set*id across all threads ---- */
+
+static struct {
+	long nr, a, b, c;
+	volatile int done;
+	volatile int failed;
+} xid;
+
+static void setxid_handler(int sig, siginfo_t *si, void *ctx)
+{
+	(void)sig;
+	(void)ctx;
+	if (si->si_code != SI_TKILL || si->si_pid != (pid_t)__sys(SYS_getpid))
+		return;
+	if (__sys(xid.nr, xid.a, xid.b, xid.c) < 0)
+		xid.failed = 1;
+	__atomic_fetch_add(&xid.done, 1, __ATOMIC_SEQ_CST);
+	__futex_wake(&xid.done, 1);
+}
+
+/* Run a credential-changing system call in every thread. It is made in
+ * the calling thread first; if that fails nothing else happens. If it
+ * then failed in another thread, credentials would differ between
+ * threads, which is never safe to continue with. */
+hidden long __setxid(long nr, long a, long b, long c)
+{
+	if (!__libc.threaded)
+		return __sys(nr, a, b, c);
+	static volatile int installed;
+	__lock(&list_lock);
+	if (!installed) {
+		struct k_sigaction ksa = { (void (*)(int))(void (*)(void))setxid_handler, SA_SIGINFO | SA_RESTORER | SA_RESTART,
+		                           __restore_rt, { ~0u, ~0u } };
+		__sys(SYS_rt_sigaction, SIGSETXID, &ksa, 0, 8);
+		installed = 1;
+	}
+	long r = __sys(nr, a, b, c);
+	if (r < 0) {
+		__unlock(&list_lock);
+		return r;
+	}
+	struct pthread *self = __self();
+	xid.nr = nr;
+	xid.a = a;
+	xid.b = b;
+	xid.c = c;
+	xid.failed = 0;
+	xid.done = 0;
+	int n = 0;
+	pid_t pid = (pid_t)__sys(SYS_getpid);
+	for (struct pthread *p = self->next; p && p != self; p = p->next) {
+		if (__sys(SYS_tgkill, pid, p->tid, SIGSETXID) == 0)
+			n++;
+	}
+	int d;
+	while ((d = xid.done) < n)
+		__futex_timedwait(&xid.done, d, CLOCK_MONOTONIC, 0, 1);
+	if (xid.failed)
+		__fatal("set*id failed in another thread: credentials would be inconsistent");
+	__unlock(&list_lock);
+	return 0;
+}
+
 static int start(void *arg)
 {
 	struct pthread *self = arg;
@@ -207,12 +316,18 @@ int pthread_create(pthread_t *__restrict res, const pthread_attr_t *__restrict a
 	void *sp = (void *)ROUND_DOWN(tp - tls, 16);
 
 	unsigned long old;
+	__libc.threaded = 1;
+	__lock(&list_lock);
 	block_all(&old);
 	p->sigmask_saved = old;
-	__libc.threaded = 1;
 	__atomic_fetch_add(&__thread_count, 1, __ATOMIC_SEQ_CST);
+	/* on the list before it runs: a set*id broadcast cannot miss it */
+	list_add(p);
 	int r = __clone(start, sp, clone_flags(), p, &p->tid, p, (int *)&p->exit_futex);
+	if (r < 0)
+		list_del(p);
 	set_mask(&old);
+	__unlock(&list_lock);
 	if (r < 0) {
 		__atomic_fetch_sub(&__thread_count, 1, __ATOMIC_SEQ_CST);
 		munmap(map, size);
@@ -228,6 +343,11 @@ void pthread_exit(void *result)
 	self->result = result;
 	self->cancel_disabled = 1;
 	__tsd_run_dtors();
+
+	/* leave the list while signals are still deliverable */
+	__lock(&list_lock);
+	list_del(self);
+	__unlock(&list_lock);
 
 	unsigned long old;
 	block_all(&old);

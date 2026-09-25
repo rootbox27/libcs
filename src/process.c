@@ -15,6 +15,18 @@
 
 /* Defined by pthread.c only when threads are linked in. */
 extern hidden volatile int __thread_count __attribute__((__weak__));
+/* weak: only a threaded process (which has pthread.o) needs these */
+extern hidden long __setxid(long, long, long, long) __attribute__((__weak__));
+extern hidden void __thread_list_lock(void) __attribute__((__weak__));
+extern hidden void __thread_list_unlock(void) __attribute__((__weak__));
+extern hidden void __thread_list_fork_child(void) __attribute__((__weak__));
+
+static long setxid(long nr, long a, long b, long c)
+{
+	if (__libc.threaded && __setxid)
+		return __setxid(nr, a, b, c);
+	return __sys(nr, a, b, c);
+}
 
 struct atfork {
 	void (*prepare)(void), (*parent)(void), (*child)(void);
@@ -52,6 +64,10 @@ pid_t fork(void)
 
 	sigset_t all, old;
 	memset(&all, 0xff, sizeof all);
+	/* no set*id broadcast may be half done when we copy the process */
+	int threaded = __libc.threaded && __thread_list_lock;
+	if (threaded)
+		__thread_list_lock();
 	__sys(SYS_rt_sigprocmask, SIG_BLOCK, &all, &old, 8);
 	long r = __sys(SYS_clone, SIGCHLD, 0, 0, 0, 0);
 	if (r == 0) {
@@ -61,6 +77,10 @@ pid_t fork(void)
 		atfork_lock = 0;
 		if (&__thread_count)
 			__thread_count = 1;
+		if (threaded)
+			__thread_list_fork_child();
+	} else if (threaded) {
+		__thread_list_unlock();
 	}
 	__sys(SYS_rt_sigprocmask, SIG_SETMASK, &old, 0, 8);
 
@@ -289,18 +309,21 @@ int system(const char *cmd)
 
 /* ---- identity ---- */
 
-int setuid(uid_t u) { return (int)sys(SYS_setuid, u); }
-int setgid(gid_t g) { return (int)sys(SYS_setgid, g); }
-int seteuid(uid_t u) { return (int)sys(SYS_setresuid, -1, u, -1); }
-int setegid(gid_t g) { return (int)sys(SYS_setresgid, -1, g, -1); }
-int setreuid(uid_t r, uid_t e) { return (int)sys(SYS_setreuid, r, e); }
-int setregid(gid_t r, gid_t e) { return (int)sys(SYS_setregid, r, e); }
-int setresuid(uid_t r, uid_t e, uid_t s) { return (int)sys(SYS_setresuid, r, e, s); }
-int setresgid(gid_t r, gid_t e, gid_t s) { return (int)sys(SYS_setresgid, r, e, s); }
+/* Credentials belong to each thread in Linux; __setxid applies the call
+ * to all of them, as POSIX requires. */
+#define SETXID(nr, a, b, c) ((int)__syscall_ret((unsigned long)setxid(nr, (long)(a), (long)(b), (long)(c))))
+int setuid(uid_t u) { return SETXID(SYS_setuid, u, 0, 0); }
+int setgid(gid_t g) { return SETXID(SYS_setgid, g, 0, 0); }
+int seteuid(uid_t u) { return SETXID(SYS_setresuid, -1, u, -1); }
+int setegid(gid_t g) { return SETXID(SYS_setresgid, -1, g, -1); }
+int setreuid(uid_t r, uid_t e) { return SETXID(SYS_setreuid, r, e, 0); }
+int setregid(gid_t r, gid_t e) { return SETXID(SYS_setregid, r, e, 0); }
+int setresuid(uid_t r, uid_t e, uid_t s) { return SETXID(SYS_setresuid, r, e, s); }
+int setresgid(gid_t r, gid_t e, gid_t s) { return SETXID(SYS_setresgid, r, e, s); }
 int getresuid(uid_t *r, uid_t *e, uid_t *s) { return (int)sys(SYS_getresuid, r, e, s); }
 int getresgid(gid_t *r, gid_t *e, gid_t *s) { return (int)sys(SYS_getresgid, r, e, s); }
 int getgroups(int n, gid_t list[]) { return (int)sys(SYS_getgroups, n, list); }
-int setgroups(size_t n, const gid_t *list) { return (int)sys(SYS_setgroups, n, list); }
+int setgroups(size_t n, const gid_t *list) { return SETXID(SYS_setgroups, n, list, 0); }
 pid_t getpgid(pid_t pid) { return (pid_t)sys(SYS_getpgid, pid); }
 pid_t getpgrp(void) { return (pid_t)__sys(SYS_getpgid, 0); }
 int setpgid(pid_t pid, pid_t pg) { return (int)sys(SYS_setpgid, pid, pg); }
