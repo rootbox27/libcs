@@ -147,4 +147,5 @@ int siginterrupt(int, int);
 int pthread_kill(pthread_t, int);
 extern const char *const sys_siglist[];
 __END_DECLS
+#include <sys/ucontext.h>
 #endif
