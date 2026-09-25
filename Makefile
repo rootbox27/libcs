@@ -15,15 +15,17 @@ CPPFLAGS_LIB = -nostdinc -isystem include -isystem $(CC_INC) -Isrc -D__CITADEL_B
 CFLAGS_LIB   = -std=c11 -O2 -g -fPIE -ffreestanding -fno-builtin -fno-strict-aliasing \
                -fno-asynchronous-unwind-tables -fstack-protector-strong \
                -Wall -Wextra -Werror -Wno-unused-parameter
-ifneq ($(shell $(CC) -v 2>&1 | grep -c '^gcc version'),0)
-CFLAGS_LIB  += -fno-tree-loop-distribute-patterns
-endif
 
 # Floating-point code must be evaluated exactly as written.
 CFLAGS_MATH = -ffp-contract=off -fno-fast-math -frounding-math
 
 # OpenBSD's malloc is kept close to upstream rather than to our warning set.
-CFLAGS_OMALLOC = -Wno-sign-compare -Wno-unused-function -Wno-unused-variable -Wno-empty-body -Wno-maybe-uninitialized
+CFLAGS_OMALLOC = -Wno-sign-compare -Wno-unused-function -Wno-unused-variable -Wno-empty-body
+
+ifneq ($(shell $(CC) -v 2>&1 | grep -c '^gcc version'),0)
+CFLAGS_LIB  += -fno-tree-loop-distribute-patterns
+CFLAGS_OMALLOC += -Wno-maybe-uninitialized
+endif
 
 # Everything reached from _start before the TCB is installed must not use
 # the stack protector (%fs is not valid yet).
