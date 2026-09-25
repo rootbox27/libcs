@@ -2,7 +2,19 @@
 
 A from-scratch, security-focused C library for x86_64 Linux. ISC licensed.
 
-**Status: early work in progress. Not yet compiled or tested.**
+**Status: early work in progress.** Builds with GCC and Clang; the test
+suite passes on x86_64 Linux.
+
+## Building and testing
+
+    make            # lib/libc.a and lib/crt1.o
+    make check      # build and run the tests
+    make CC=clang check
+
+Each test is linked three ways (static-PIE, static-PIE with RELR packed
+relocations, and plain static) against only `crt1.o` and `libc.a`. Tests
+named `abort_*` / `segv_*` must die with SIGABRT / SIGSEGV; they cover
+the fortify, stack-protector and allocator checks.
 
 ## What's here
 
@@ -18,10 +30,15 @@ A from-scratch, security-focused C library for x86_64 Linux. ISC licensed.
   fortify failure handlers, `exit`/`atexit` with mangled handler pointers.
 - `src/string.c` — string and memory functions, `strlcpy`/`strlcat`,
   `explicit_bzero`, constant-time comparisons, fortify `__*_chk` entry points.
+- `src/ctype.c`, `src/syscalls.c` — C-locale ctype; `mmap` family, basic
+  fd I/O and process-identity wrappers.
+- `src/malloc.c` — **placeholder** allocator (one mapping per allocation,
+  end-aligned against a guard page, tagged headers checked on free) so
+  the library links and can be tested.
 
 ## Not yet done
 
-- Memory allocator (`malloc` and friends). The plan is to integrate an
-  existing permissively licensed hardened allocator.
-- stdio/printf, the rest of stdlib, syscall wrappers, signals, time,
-  threads, sockets, math, a Makefile and tests.
+- Real memory allocator. The plan is to integrate an existing permissively
+  licensed hardened allocator in place of `src/malloc.c`.
+- stdio/printf, the rest of stdlib, most syscall wrappers, signals, time,
+  threads, sockets, math.

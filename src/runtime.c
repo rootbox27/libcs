@@ -214,7 +214,11 @@ void _Exit(int code)
 		__asm__ volatile("hlt");
 	}
 }
-weak_alias(_Exit, _exit);
+extern __typeof(_Exit) _exit __attribute__((__weak__, __alias__("_Exit"), __noreturn__));
+
+/* Replaced by the real stdio flush once stdio exists. */
+static void dummy(void) {}
+weak_alias(dummy, __stdio_exit);
 
 void exit(int code)
 {
