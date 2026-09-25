@@ -48,5 +48,11 @@ void tzset(void);
 extern char *tzname[2];
 extern long timezone;
 extern int daylight;
+struct sigevent;
+int timer_create(clockid_t, struct sigevent *__restrict, timer_t *__restrict);
+int timer_delete(timer_t);
+int timer_settime(timer_t, int, const struct itimerspec *__restrict, struct itimerspec *__restrict);
+int timer_gettime(timer_t, struct itimerspec *);
+int timer_getoverrun(timer_t);
 __END_DECLS
 #endif

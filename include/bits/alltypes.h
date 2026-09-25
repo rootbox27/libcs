@@ -29,6 +29,7 @@ typedef int key_t;
 typedef void *timer_t;
 typedef unsigned wint_t;
 typedef unsigned long pthread_t;
+typedef struct { size_t __stacksize, __guardsize; int __detach; void *__stackaddr; } pthread_attr_t;
 #ifndef __DEFINED_timespec
 #define __DEFINED_timespec
 struct timespec { time_t tv_sec; long tv_nsec; };
