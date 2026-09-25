@@ -43,6 +43,7 @@ struct __citadel_file {
 	int lbf;                    /* '\n' if line buffered, else -1 */
 	uintptr_t read_fn, write_fn, seek_fn, close_fn;
 	void *cookie;
+	int pipe_pid;               /* popen child, 0 if none */
 	volatile int lock;
 	int owner, lock_count;
 	struct __citadel_file *prev, *next;

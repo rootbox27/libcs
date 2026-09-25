@@ -152,7 +152,7 @@ const char *strerrorname_np(int e)
 	return 0;
 }
 
-static const char *const sigtab[] = {
+const char *const sys_siglist[_NSIG] = {
 	[SIGHUP] = "Hangup",
 	[SIGINT] = "Interrupt",
 	[SIGQUIT] = "Quit",
@@ -188,8 +188,8 @@ static const char *const sigtab[] = {
 
 char *strsignal(int s)
 {
-	if (s > 0 && (size_t)s < sizeof sigtab / sizeof *sigtab && sigtab[s])
-		return (char *)sigtab[s];
+	if (s > 0 && (size_t)s < sizeof sys_siglist / sizeof *sys_siglist && sys_siglist[s])
+		return (char *)sys_siglist[s];
 	if (s >= 34 && s <= 64)
 		return (char *)"Real-time signal";
 	return (char *)"Unknown signal";

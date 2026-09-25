@@ -29,9 +29,12 @@ LIB_OBJ = $(patsubst src/%.c,obj/%.o,$(LIB_C)) $(patsubst src/%.S,obj/%.o,$(LIB_
 
 all: lib/libc.a lib/crt1.o
 
-obj/%.o: src/%.c src/internal.h $(wildcard include/*.h include/*/*.h)
+# -MMD: the compiler records every header each object uses (obj/*.d).
+obj/%.o: src/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS_LIB) $(CFLAGS_LIB) $(if $(filter $<,$(NOSSP)),-fno-stack-protector) -c -o $@ $<
+	$(CC) $(CPPFLAGS_LIB) $(CFLAGS_LIB) -MMD -MP $(if $(filter $<,$(NOSSP)),-fno-stack-protector) -c -o $@ $<
+
+-include $(wildcard obj/*.d obj/*/*.d)
 
 obj/%.o: src/%.S
 	@mkdir -p $(dir $@)
@@ -65,15 +68,17 @@ PIE_BINS    = $(patsubst %,test/bin/pie/%,$(TEST_NAMES))
 RELR_BINS   = $(patsubst %,test/bin/relr/%,$(TEST_NAMES))
 STATIC_BINS = $(patsubst %,test/bin/static/%,$(TEST_NAMES))
 
-test/bin/pie/%: test/%.c test/harness.h lib/libc.a lib/crt1.o
+TEST_DEPS = test/harness.h lib/libc.a lib/crt1.o $(wildcard include/*.h include/*/*.h)
+
+test/bin/pie/%: test/%.c $(TEST_DEPS)
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS_T) $(CFLAGS_T) $(LDFLAGS_T) -static-pie -o $@ lib/crt1.o $< lib/libc.a $(LIBGCC)
 
-test/bin/relr/%: test/%.c test/harness.h lib/libc.a lib/crt1.o
+test/bin/relr/%: test/%.c $(TEST_DEPS)
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS_T) $(CFLAGS_T) $(LDFLAGS_T) -Wl,-z,pack-relative-relocs -static-pie -o $@ lib/crt1.o $< lib/libc.a $(LIBGCC)
 
-test/bin/static/%: test/%.c test/harness.h lib/libc.a lib/crt1.o
+test/bin/static/%: test/%.c $(TEST_DEPS)
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS_T) $(CFLAGS_T) $(LDFLAGS_T) -static -o $@ lib/crt1.o $< lib/libc.a $(LIBGCC)
 
