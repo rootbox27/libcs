@@ -13,7 +13,7 @@ typedef struct { long long __pos; } fpos_t;
 #define BUFSIZ 8192
 #define FILENAME_MAX 4096
 #define FOPEN_MAX 1000
-#define L_tmpnam 20
+#define L_tmpnam 32
 #define TMP_MAX 10000
 #define P_tmpdir "/tmp"
 #define _IOFBF 0
@@ -35,6 +35,7 @@ FILE *freopen(const char *__restrict, const char *__restrict, FILE *__restrict);
 FILE *fmemopen(void *__restrict, size_t, const char *__restrict);
 FILE *open_memstream(char **, size_t *);
 FILE *tmpfile(void);
+char *tmpnam(char *);
 FILE *popen(const char *, const char *);
 int pclose(FILE *);
 int fclose(FILE *);

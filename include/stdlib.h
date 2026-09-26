@@ -5,6 +5,7 @@
 #define __need_wchar_t
 #define __need_NULL
 #include <stddef.h>
+#include <bits/locale_t.h>
 __BEGIN_DECLS
 #define EXIT_SUCCESS 0
 #define EXIT_FAILURE 1
@@ -93,6 +94,14 @@ int grantpt(int);
 int unlockpt(int);
 char *ptsname(int);
 int ptsname_r(int, char *, size_t);
+/* not POSIX, but glibc, musl and the BSDs have them and libc++ needs them */
+float strtof_l(const char *__restrict, char **__restrict, locale_t);
+double strtod_l(const char *__restrict, char **__restrict, locale_t);
+long double strtold_l(const char *__restrict, char **__restrict, locale_t);
+long strtol_l(const char *__restrict, char **__restrict, int, locale_t);
+unsigned long strtoul_l(const char *__restrict, char **__restrict, int, locale_t);
+long long strtoll_l(const char *__restrict, char **__restrict, int, locale_t);
+unsigned long long strtoull_l(const char *__restrict, char **__restrict, int, locale_t);
 __END_DECLS
 #include <alloca.h>
 #endif

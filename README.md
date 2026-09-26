@@ -18,6 +18,11 @@ Programs link statically against `crt1.o` and `libc.a` only:
     cc -nostdinc -isystem include -isystem $(cc -print-file-name=include) \
        -nostdlib -static-pie -o prog lib/crt1.o prog.c lib/libc.a $(cc -print-libgcc-file-name)
 
+For plain `-static` (non-PIE) links, add `-Wl,--eh-frame-hdr`. GCC only
+passes it for dynamic and static-PIE links, and without it there is no
+PT_GNU_EH_FRAME segment, so C++ exceptions and `_Unwind_Backtrace`
+cannot find the unwind tables.
+
 Each test is linked three ways (static-PIE, static-PIE with RELR packed
 relocations, and plain static). Tests named `abort_*` / `segv_*` must die
 with SIGABRT / SIGSEGV; they cover the fortify, stack-protector and
@@ -77,14 +82,27 @@ allocator checks. A test may have a `.expected` file for its stdout.
   futex-based locks, `setjmp`/`longjmp`, `clone`.
 - **Strings and memory**: `<string.h>`, `<strings.h>`, `strlcpy`/`strlcat`,
   `explicit_bzero`, constant-time comparisons.
-- **stdio**: buffered FILE streams, `printf`/`scanf` families (including
-  wide-character versions), `fmemopen`, `open_memstream`, `popen`,
-  `getline`, temporary files. `strtod` and `printf` are correctly rounded.
+- **stdio**: buffered FILE streams, `printf`/`scanf` families,
+  `fmemopen`, `open_memstream`, `popen`, `getline`, temporary files
+  (`tmpnam` too, though `mkstemp`/`tmpfile` are the safe choice).
+  `strtod` and `printf` are correctly rounded.
+- **Wide-character stdio**: stream orientation (`fwide`), `fgetwc`/`fputwc`
+  and the rest of the character and line functions, and the
+  `wprintf`/`wscanf` families. Streams carry UTF-8. Numbers go through
+  the byte engines, so `wprintf` and `wscanf` round exactly as `printf`
+  and `scanf` do.
 - **stdlib**: conversions, `qsort`, environment, `realpath`, `mkstemp`
   family, `arc4random`, random numbers.
-- **Multibyte and wide characters**: UTF-8 conversions, `<wchar.h>`,
-  `<wctype.h>` with Unicode 15 tables (`scripts/gen-unicode.pl`).
-  `setlocale` accepts only the C and C.UTF-8 locales.
+- **Multibyte and wide characters**: UTF-8 conversions (including
+  `mbsnrtowcs`/`wcsnrtombs` and C23 `char8_t`), `<wchar.h>` string and
+  numeric functions (`wcstod` rounds as `strtod` does), `wcsftime`,
+  `<wctype.h>` with Unicode 15 tables (`scripts/gen-unicode.pl`) and
+  `wctrans`. `setlocale` accepts only the C and C.UTF-8 locales.
+- **Locales**: the POSIX 2008 API (`newlocale`, `duplocale`, `uselocale`,
+  `LC_*_MASK`), with `locale_t` visible from every header that uses it.
+  All the `*_l` functions are there, from `isalpha_l` to `strftime_l`,
+  plus `strtod_l` and friends for libc++. With a single locale, each is
+  its plain counterpart.
 - **POSIX**: file system and fd wrappers, directories, signals, process
   control (`fork`, `exec*`, `wait*`), time zones (TZif files and
   POSIX TZ strings), `strftime`/`strptime`, termios, sockets and
@@ -92,7 +110,8 @@ allocator checks. A test may have a `.expected` file for its stdout.
   `passwd`/`group` lookups, `syslog`, `err`/`warn`.
 - **Threads**: `<pthread.h>` — threads, mutexes, condition variables,
   rwlocks, barriers, spinlocks, once, thread-specific data and
-  cancellation; C11 `<threads.h>`; `<semaphore.h>` (named semaphores in
+  cancellation, `pthread_cond_clockwait`; C11 `<threads.h>`;
+  `<semaphore.h>` (named semaphores in
   `/dev/shm`); POSIX timers with all notification kinds; `<mqueue.h>`;
   `<aio.h>` on worker threads; `<ucontext.h>`.
 - **Processes**: `<spawn.h>` (`posix_spawn` via `CLONE_VM|CLONE_VFORK`),
@@ -110,6 +129,11 @@ allocator checks. A test may have a `.expected` file for its stdout.
   `<crypt.h>`, `<shadow.h>`, `<utmpx.h>`, `<mntent.h>`, `<uchar.h>`,
   `<dlfcn.h>` (static only), `<execinfo.h>`, System V IPC, and the Linux
   timerfd, signalfd, inotify, xattr, mount and statfs wrappers.
+- **For the C++ runtime**: `<link.h>` with `dl_iterate_phdr` (used by LLVM's
+  libunwind) and `_dl_find_object` (used by GCC's unwinder). Both report
+  the executable and the vDSO with their PT_GNU_EH_FRAME.
+  `__cxa_thread_atexit_impl` runs `thread_local` destructors, and
+  `<linux/futex.h>` provides the futex constants.
 - **Math** (`src/math/`): all of C99 `<math.h>` in double, float and long
   double, plus `<fenv.h>`.
   - The double functions use double-double kernels with tables and

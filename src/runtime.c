@@ -240,6 +240,8 @@ void exit(int code)
 	/* A second concurrent exit() waits forever rather than racing. */
 	if (__sync_lock_test_and_set(&exiting, 1))
 		for (;;) __sys(SYS_pause);
+	if (__run_tls_dtors)
+		__run_tls_dtors();
 	run_exit_fns();
 	size_t n = __fini_array_end - __fini_array_start;
 	while (n)

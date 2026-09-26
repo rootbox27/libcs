@@ -4,6 +4,7 @@
 #define __need_size_t
 #define __need_NULL
 #include <stddef.h>
+#include <bits/locale_t.h>
 __BEGIN_DECLS
 void *memcpy(void *__restrict, const void *__restrict, size_t);
 void *memmove(void *, const void *, size_t);
@@ -50,6 +51,9 @@ int timingsafe_bcmp(const void *, const void *, size_t);
 int timingsafe_memcmp(const void *, const void *, size_t);
 int strverscmp(const char *, const char *);
 #include <strings.h>
+int strcoll_l(const char *, const char *, locale_t);
+size_t strxfrm_l(char *__restrict, const char *__restrict, size_t, locale_t);
+char *strerror_l(int, locale_t);
 __END_DECLS
 #ifdef __CITADEL_FORTIFY
 #include <bits/fortify_string.h>

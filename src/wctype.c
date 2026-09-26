@@ -117,40 +117,17 @@ int wcswidth(const wchar_t *s, size_t n)
 	return w;
 }
 
-/* wcstol/wcstoul: only ASCII characters can be part of a number, so
- * narrow the leading candidate characters and use strtol. */
-static size_t narrow(const wchar_t *s, char *buf, size_t cap)
+/* wctrans: the two mappings C defines */
+wctrans_t wctrans(const char *name)
 {
-	size_t i = 0;
-	while (i + 1 < cap && s[i] && (unsigned)s[i] < 0x80) {
-		buf[i] = (char)s[i];
-		i++;
-	}
-	buf[i] = 0;
-	return i;
+	if (!strcmp(name, "tolower"))
+		return 1;
+	if (!strcmp(name, "toupper"))
+		return 2;
+	return 0;
 }
 
-long wcstol(const wchar_t *__restrict s, wchar_t **__restrict end, int base)
+wint_t towctrans(wint_t c, wctrans_t t)
 {
-	char buf[256], *e;
-	size_t n = narrow(s, buf, sizeof buf);
-	long v = strtol(buf, &e, base);
-	/* a number longer than the buffer: report range error */
-	if (n == sizeof buf - 1 && !*e && s[n] && (unsigned)s[n] < 0x80 && isxdigit((unsigned char)s[n]))
-		errno = ERANGE;
-	if (end)
-		*end = (wchar_t *)s + (e - buf);
-	return v;
-}
-
-unsigned long wcstoul(const wchar_t *__restrict s, wchar_t **__restrict end, int base)
-{
-	char buf[256], *e;
-	size_t n = narrow(s, buf, sizeof buf);
-	unsigned long v = strtoul(buf, &e, base);
-	if (n == sizeof buf - 1 && !*e && s[n] && (unsigned)s[n] < 0x80 && isxdigit((unsigned char)s[n]))
-		errno = ERANGE;
-	if (end)
-		*end = (wchar_t *)s + (e - buf);
-	return v;
+	return t == 1 ? towlower(c) : t == 2 ? towupper(c) : c;
 }

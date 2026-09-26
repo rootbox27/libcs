@@ -1,7 +1,7 @@
 #ifndef _LANGINFO_H
 #define _LANGINFO_H
 #include <features.h>
-#include <locale.h>
+#include <bits/locale_t.h>
 __BEGIN_DECLS
 
 typedef int nl_item;

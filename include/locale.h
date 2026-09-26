@@ -11,6 +11,13 @@ __BEGIN_DECLS
 #define LC_MONETARY 4
 #define LC_MESSAGES 5
 #define LC_ALL 6
+#define LC_CTYPE_MASK (1 << LC_CTYPE)
+#define LC_NUMERIC_MASK (1 << LC_NUMERIC)
+#define LC_TIME_MASK (1 << LC_TIME)
+#define LC_COLLATE_MASK (1 << LC_COLLATE)
+#define LC_MONETARY_MASK (1 << LC_MONETARY)
+#define LC_MESSAGES_MASK (1 << LC_MESSAGES)
+#define LC_ALL_MASK 0x3f
 struct lconv {
 	char *decimal_point, *thousands_sep, *grouping, *int_curr_symbol, *currency_symbol,
 	     *mon_decimal_point, *mon_thousands_sep, *mon_grouping, *positive_sign, *negative_sign;
@@ -18,12 +25,13 @@ struct lconv {
 	     n_sep_by_space, p_sign_posn, n_sign_posn, int_p_cs_precedes, int_p_sep_by_space,
 	     int_n_cs_precedes, int_n_sep_by_space, int_p_sign_posn, int_n_sign_posn;
 };
-typedef struct __citadel_locale *locale_t;
+#include <bits/locale_t.h>
 #define LC_GLOBAL_LOCALE ((locale_t)-1)
 char *setlocale(int, const char *);
 struct lconv *localeconv(void);
 locale_t uselocale(locale_t);
 locale_t newlocale(int, const char *, locale_t);
 void freelocale(locale_t);
+locale_t duplocale(locale_t);
 __END_DECLS
 #endif

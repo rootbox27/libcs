@@ -71,6 +71,10 @@ CFLAGS_T   += -fno-printf-return-value
 endif
 LDFLAGS_T  = -nostdlib -Wl,-z,relro,-z,now -Wl,-z,noexecstack
 LIBGCC     := $(shell $(CC) -print-libgcc-file-name)
+# The unwinder, for the tests of dl_iterate_phdr/_dl_find_object; it calls
+# back into libc, hence the group.
+LIBGCC_EH  := $(shell $(CC) -print-file-name=libgcc_eh.a)
+LIBS_T     = -Wl,--start-group lib/libc.a $(LIBGCC_EH) $(LIBGCC) -Wl,--end-group
 
 PIE_BINS    = $(patsubst %,test/bin/pie/%,$(TEST_NAMES))
 RELR_BINS   = $(patsubst %,test/bin/relr/%,$(TEST_NAMES))
@@ -80,15 +84,15 @@ TEST_DEPS = test/harness.h lib/libc.a lib/crt1.o $(wildcard include/*.h include/
 
 test/bin/pie/%: test/%.c $(TEST_DEPS)
 	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS_T) $(CFLAGS_T) $(LDFLAGS_T) -static-pie -o $@ lib/crt1.o $< lib/libc.a $(LIBGCC)
+	$(CC) $(CPPFLAGS_T) $(CFLAGS_T) $(LDFLAGS_T) -static-pie -o $@ lib/crt1.o $< $(LIBS_T)
 
 test/bin/relr/%: test/%.c $(TEST_DEPS)
 	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS_T) $(CFLAGS_T) $(LDFLAGS_T) -Wl,-z,pack-relative-relocs -static-pie -o $@ lib/crt1.o $< lib/libc.a $(LIBGCC)
+	$(CC) $(CPPFLAGS_T) $(CFLAGS_T) $(LDFLAGS_T) -Wl,-z,pack-relative-relocs -static-pie -o $@ lib/crt1.o $< $(LIBS_T)
 
 test/bin/static/%: test/%.c $(TEST_DEPS)
 	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS_T) $(CFLAGS_T) $(LDFLAGS_T) -static -o $@ lib/crt1.o $< lib/libc.a $(LIBGCC)
+	$(CC) $(CPPFLAGS_T) $(CFLAGS_T) $(LDFLAGS_T) -Wl,--eh-frame-hdr -static -o $@ lib/crt1.o $< $(LIBS_T)
 
 check: $(PIE_BINS) $(RELR_BINS) $(STATIC_BINS)
 	@./test/run.sh $^
