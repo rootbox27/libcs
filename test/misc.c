@@ -281,8 +281,28 @@ static void wide(void)
 	wchar_t *e;
 	CHECK(wcstol(L"  -42abc", &e, 10) == -42 && *e == L'a');
 	CHECK(wcstoul(L"ff", &e, 16) == 255);
-	CHECK(setlocale(LC_ALL, "") && !strcmp(setlocale(LC_ALL, 0), "C") && setlocale(LC_ALL, "C.UTF-8"));
-	CHECK(setlocale(LC_ALL, "de_DE.UTF-8") == 0 && !strcmp(localeconv()->decimal_point, "."));
+	/* UTF-8 locales are accepted and behave as C.UTF-8; others are not */
+	CHECK(!strcmp(setlocale(LC_ALL, 0), "C"));
+	CHECK(setlocale(LC_ALL, "de_DE.UTF-8") && !strcmp(localeconv()->decimal_point, "."));
+	CHECK(!strcmp(setlocale(LC_ALL, 0), "de_DE.UTF-8") && !strcmp(setlocale(LC_CTYPE, 0), "de_DE.UTF-8"));
+	CHECK(setlocale(LC_ALL, "sr_RS.utf8@latin") && setlocale(LC_ALL, "POSIX") && !strcmp(setlocale(LC_ALL, 0), "C"));
+	CHECK(!setlocale(LC_ALL, "de_DE.ISO-8859-1") && !setlocale(LC_ALL, "en_US") && !setlocale(LC_ALL, "xx.UTF-8/../x"));
+	CHECK(!strcmp(setlocale(LC_ALL, 0), "C")); /* a refused name changes nothing */
+	/* "" reads LC_ALL, then LC_<category>, then LANG */
+	unsetenv("LC_ALL");
+	setenv("LANG", "en_US.UTF-8", 1);
+	setenv("LC_TIME", "fr_FR.UTF-8", 1);
+	unsetenv("LC_CTYPE"); unsetenv("LC_NUMERIC"); unsetenv("LC_COLLATE");
+	unsetenv("LC_MONETARY"); unsetenv("LC_MESSAGES");
+	CHECK(setlocale(LC_ALL, ""));
+	CHECK(!strcmp(setlocale(LC_CTYPE, 0), "en_US.UTF-8") && !strcmp(setlocale(LC_TIME, 0), "fr_FR.UTF-8"));
+	CHECK(!strcmp(setlocale(LC_ALL, 0), "LC_CTYPE=en_US.UTF-8;LC_NUMERIC=en_US.UTF-8;LC_TIME=fr_FR.UTF-8;"
+	                                    "LC_COLLATE=en_US.UTF-8;LC_MONETARY=en_US.UTF-8;LC_MESSAGES=en_US.UTF-8"));
+	setenv("LC_ALL", "de_DE.ISO-8859-1", 1);
+	CHECK(!setlocale(LC_ALL, "") && !strcmp(setlocale(LC_CTYPE, 0), "en_US.UTF-8"));
+	unsetenv("LC_ALL");
+	unsetenv("LC_TIME");
+	CHECK(setlocale(LC_ALL, "C.UTF-8") && newlocale(LC_ALL_MASK, "en_GB.UTF-8", 0) && !newlocale(LC_ALL_MASK, "en_GB", 0));
 }
 
 static void system_info(void)

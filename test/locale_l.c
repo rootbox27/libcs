@@ -18,10 +18,16 @@ int main(void)
 	locale_t l = newlocale(LC_ALL_MASK, "C.UTF-8", 0);
 	CHECK(l != 0);
 	errno = 0;
-	CHECK(!newlocale(LC_ALL_MASK, "de_DE.UTF-8", 0) && errno == ENOENT);
+	CHECK(!newlocale(LC_ALL_MASK, "de_DE.ISO-8859-1", 0) && errno == ENOENT && newlocale(LC_ALL_MASK, "de_DE.UTF-8", 0));
 	errno = 0;
 	CHECK(!newlocale(1 << 12, "C", 0) && errno == EINVAL);
 	CHECK(!newlocale(LC_CTYPE_MASK, 0, 0));
+	unsetenv("LC_ALL");
+	setenv("LANG", "pt_BR.UTF-8", 1);
+	CHECK(newlocale(LC_ALL_MASK, "", 0));
+	setenv("LC_NUMERIC", "pt_BR.ISO-8859-1", 1);
+	CHECK(!newlocale(LC_ALL_MASK, "", 0) && newlocale(LC_CTYPE_MASK, "", 0));
+	unsetenv("LC_NUMERIC");
 	locale_t d = duplocale(l), g = duplocale(LC_GLOBAL_LOCALE);
 	CHECK(d && g);
 	CHECK(uselocale(l) == LC_GLOBAL_LOCALE && uselocale(0) == l);

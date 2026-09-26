@@ -215,6 +215,12 @@ static void files(void)
 	CHECK(stat(l1, &st) == 0 && S_ISDIR(st.st_mode));
 	CHECK(access(f, R_OK | W_OK) == 0 && access(q, F_OK) == -1);
 	CHECK(chmod(f, 0400) == 0 && stat(f, &st) == 0 && (st.st_mode & 0777) == 0400);
+	/* a read-only file cannot be truncated, except by root */
+	if (geteuid() != 0) {
+		errno = 0;
+		CHECK(truncate(f, 2) == -1 && errno == EACCES);
+	}
+	CHECK(chmod(f, 0600) == 0);
 	CHECK(truncate(f, 2) == 0 && stat(f, &st) == 0 && st.st_size == 2);
 
 	/* clean up */

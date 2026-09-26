@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <sys/syscall.h>
 #include <bits/alltypes.h>
+#include <elf.h>
 
 #define hidden __attribute__((__visibility__("hidden")))
 #define likely(x) __builtin_expect(!!(x), 1)
@@ -124,12 +125,21 @@ static inline struct pthread *__self(void)
 }
 
 /* ---- global runtime state ---------------------------------------------- */
+#define AUX_CNT 64
+#define TLS_MODS_MAX 16
 struct libc_state {
 	size_t *auxv;
 	int secure;             /* AT_SECURE: setuid/setgid or capabilities */
 	int threaded;           /* set once a second thread has been created */
-	size_t tls_size, tls_align, tls_file_size, tls_offset;
-	const void *tls_image;
+	/* static TLS: the modules' blocks lie below the thread pointer,
+	 * the first (the executable) ends at it; tls_offset is the total */
+	struct tls_mod {
+		const void *image;
+		size_t filesz, memsz, align, offset;
+	} tls_mods[TLS_MODS_MAX];
+	int tls_count;
+	size_t tls_align, tls_offset;
+	int dynamic;            /* started by the dynamic linker (libc.so) */
 	uintptr_t ptr_guard;    /* secret for pointer mangling */
 	uintptr_t canary;
 	const char *progname;
@@ -174,6 +184,18 @@ hidden int __clone(int (*fn)(void *), void *stack, int flags, void *arg, int *pt
 hidden __attribute__((__noreturn__)) void __unmapself(void *base, size_t size);
 hidden int __fmodeflags(const char *mode);
 hidden void __init_tp(struct pthread *p);
+/* startup helpers (start.c), shared with the dynamic linker */
+hidden __attribute__((__noreturn__)) void __early_die(void);
+hidden void __self_relocate(uintptr_t base, const Elf64_Dyn *dyn, int strict);
+hidden int __tls_add(const void *image, size_t filesz, size_t memsz, size_t align);
+hidden void __tls_layout(void);
+hidden void __copy_tls(uintptr_t tp);
+hidden void __setup_tcb(const unsigned char *rnd);
+hidden void __apply_relro(uintptr_t base, const Elf64_Phdr *ph, size_t phnum);
+hidden size_t *__auxv_of(char **envp, size_t *aux);
+hidden void __wipe_random(const size_t *aux);
+hidden void __init_libc(int argc, char **argv, char **envp, const size_t *aux);
+hidden void __dl_fini(void); /* libc.so only */
 hidden void *__mmap_raw(size_t len);
 hidden void __secure_random(void *buf, size_t len);
 

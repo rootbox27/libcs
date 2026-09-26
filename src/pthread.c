@@ -300,7 +300,7 @@ int pthread_create(pthread_t *__restrict res, const pthread_attr_t *__restrict a
 	/* TCB at the top (aligned), TLS block just below it */
 	uintptr_t tp = ROUND_DOWN((uintptr_t)(map + size - sizeof(struct pthread)), align);
 	struct pthread *p = (struct pthread *)tp;
-	memcpy((void *)(tp - tls), __libc.tls_image, __libc.tls_file_size);
+	__copy_tls(tp);
 	p->self = p;
 	p->canary = __libc.canary;
 	p->ptr_guard = __libc.ptr_guard;
