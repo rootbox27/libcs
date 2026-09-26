@@ -345,6 +345,8 @@ void pthread_exit(void *result)
 	struct pthread *self = __self();
 	self->result = result;
 	self->cancel_disabled = 1;
+	if (__run_tls_dtors)
+		__run_tls_dtors();
 	__tsd_run_dtors();
 
 	/* leave the list while signals are still deliverable */

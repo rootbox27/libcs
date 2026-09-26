@@ -112,6 +112,7 @@ struct pthread {
 	struct pthread *next, *prev; /* list of live threads */
 	char name[16];
 	unsigned long sigmask_saved;
+	struct tls_dtor *tls_dtors;  /* __cxa_thread_atexit_impl, newest first */
 	void *tsd_storage[128];
 };
 
@@ -166,6 +167,7 @@ hidden void __random_fork(void);
 hidden void __malloc_atfork(int phase);
 hidden void __stdio_atfork(int phase);
 hidden void __tsd_run_dtors(void);
+hidden void __run_tls_dtors(void) __attribute__((__weak__));
 hidden void __testcancel(void);
 hidden int __futex_timedwait(volatile int *addr, int val, clockid_t clk, const struct timespec *abs, int priv);
 hidden int __clone(int (*fn)(void *), void *stack, int flags, void *arg, int *ptid, void *tls, int *ctid);

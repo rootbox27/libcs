@@ -125,7 +125,8 @@ int pthread_cond_init(pthread_cond_t *__restrict c, const pthread_condattr_t *__
 
 int pthread_cond_destroy(pthread_cond_t *c) { return 0; }
 
-int pthread_cond_timedwait(pthread_cond_t *__restrict c, pthread_mutex_t *__restrict m, const struct timespec *__restrict abs)
+static int cond_wait(pthread_cond_t *__restrict c, pthread_mutex_t *__restrict m, clockid_t clk,
+                     const struct timespec *__restrict abs)
 {
 	if (!valid_ts(abs))
 		return EINVAL;
@@ -137,7 +138,7 @@ int pthread_cond_timedwait(pthread_cond_t *__restrict c, pthread_mutex_t *__rest
 	/* release the mutex completely, even if recursively held */
 	m->__count = 1;
 	pthread_mutex_unlock(m);
-	int r = __futex_timedwait(&c->__seq, seq, c->__clock, abs, 1);
+	int r = __futex_timedwait(&c->__seq, seq, clk, abs, 1);
 	/* reacquire before acting on cancellation or returning */
 	lock_common(m, 0, 0);
 	m->__count = count;
@@ -146,9 +147,23 @@ int pthread_cond_timedwait(pthread_cond_t *__restrict c, pthread_mutex_t *__rest
 	return r == -ETIMEDOUT ? ETIMEDOUT : 0;
 }
 
+int pthread_cond_timedwait(pthread_cond_t *__restrict c, pthread_mutex_t *__restrict m, const struct timespec *__restrict abs)
+{
+	return cond_wait(c, m, c->__clock, abs);
+}
+
+/* POSIX 2024: the clock is the caller's, not the condition variable's */
+int pthread_cond_clockwait(pthread_cond_t *__restrict c, pthread_mutex_t *__restrict m, clockid_t clk,
+                           const struct timespec *__restrict abs)
+{
+	if ((clk != CLOCK_REALTIME && clk != CLOCK_MONOTONIC) || !abs)
+		return EINVAL;
+	return cond_wait(c, m, clk, abs);
+}
+
 int pthread_cond_wait(pthread_cond_t *__restrict c, pthread_mutex_t *__restrict m)
 {
-	return pthread_cond_timedwait(c, m, 0);
+	return cond_wait(c, m, c->__clock, 0);
 }
 
 int pthread_cond_signal(pthread_cond_t *c)

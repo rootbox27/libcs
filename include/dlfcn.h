@@ -24,5 +24,22 @@ int dlclose(void *);
 void *dlsym(void *__restrict, const char *__restrict);
 char *dlerror(void);
 int dladdr(const void *, Dl_info *);
+
+/* _dl_find_object (glibc 2.35): the object containing an address and its
+ * PT_GNU_EH_FRAME segment. GCC's unwinder uses it to find the unwind
+ * tables for C++ exceptions. Returns 0, or -1 if no object contains pc. */
+struct link_map;
+struct dl_find_object {
+	unsigned long long dlfo_flags;
+	void *dlfo_map_start;
+	void *dlfo_map_end;
+	struct link_map *dlfo_link_map;
+	void *dlfo_eh_frame;
+	unsigned long long __dlfo_reserved[7];
+};
+#define DLFO_STRUCT_HAS_EH_DBASE 0
+#define DLFO_STRUCT_HAS_EH_COUNT 0
+#define DLFO_EH_SEGMENT_TYPE 0x6474e550 /* PT_GNU_EH_FRAME */
+int _dl_find_object(void *, struct dl_find_object *);
 __END_DECLS
 #endif
