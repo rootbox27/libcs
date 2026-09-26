@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: make check (${{ matrix.cc }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          ${{ matrix.cc }} --version
+          ld --version | head -1
+      - name: Build
+        run: make -j"$(nproc)" CC=${{ matrix.cc }}
+      - name: Test
+        run: make -j"$(nproc)" CC=${{ matrix.cc }} check
