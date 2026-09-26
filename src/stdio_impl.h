@@ -4,6 +4,7 @@
 
 #include "internal.h"
 #include <stdio.h>
+#include <wchar.h>
 
 #define UNGET 8                 /* bytes reserved before buf for ungetc */
 
@@ -41,6 +42,7 @@ struct __citadel_file {
 	size_t buf_size;
 	int fd;
 	int lbf;                    /* '\n' if line buffered, else -1 */
+	signed char mode;           /* orientation: 0 none yet, <0 byte, >0 wide */
 	uintptr_t read_fn, write_fn, seek_fn, close_fn;
 	void *cookie;
 	int pipe_pid;               /* popen child, 0 if none */
@@ -93,6 +95,9 @@ hidden int __fflush_unlocked(FILE *);
 hidden off_t __ftello_unlocked(FILE *);
 hidden int __fseeko_unlocked(FILE *, off_t, int);
 hidden int __vfprintf_unlocked(FILE *, const char *, va_list);
+hidden wint_t __fgetwc_unlocked(FILE *);
+hidden wint_t __fputwc_unlocked(wchar_t, FILE *);
+hidden wint_t __ungetwc_unlocked(wint_t, FILE *);
 /* Initialise a stack FILE with the given buffer (size >= UNGET). */
 hidden void __file_init(FILE *, int fd, unsigned flags, unsigned char *buf, size_t size);
 

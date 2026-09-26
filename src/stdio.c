@@ -181,6 +181,8 @@ hidden int __stdio_close(FILE *f)
 
 hidden int __toread(FILE *f)
 {
+	if (!f->mode)
+		f->mode = -1; /* first use of a stream by byte functions */
 	if (f->wpos != f->wbase)
 		f_write(f, 0, 0);
 	f->wpos = f->wbase = f->wend = 0;
@@ -196,6 +198,8 @@ hidden int __toread(FILE *f)
 
 hidden int __towrite(FILE *f)
 {
+	if (!f->mode)
+		f->mode = -1;
 	if (f->flags & F_NOWR) {
 		f->flags |= F_ERR;
 		errno = EBADF;
@@ -471,6 +475,7 @@ FILE *freopen(const char *__restrict path, const char *__restrict mode, FILE *__
 		}
 	}
 	f->flags &= F_PERM | F_SVB;
+	f->mode = 0;
 	if (!strchr(mode, '+'))
 		f->flags |= *mode == 'r' ? F_NOWR : F_NORD;
 	if (*mode == 'a')
