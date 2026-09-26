@@ -9,11 +9,11 @@ with both.
 
 ## Building and testing
 
-    make            # lib/libc.a and lib/crt1.o
+    make            # lib/libc.a, lib/libc.so and lib/crt1.o
     make check      # build and run the tests
     make CC=clang check
 
-Programs link statically against `crt1.o` and `libc.a` only:
+Programs link statically against `crt1.o` and `libc.a`:
 
     cc -nostdinc -isystem include -isystem $(cc -print-file-name=include) \
        -nostdlib -static-pie -o prog lib/crt1.o prog.c lib/libc.a $(cc -print-libgcc-file-name)
@@ -23,8 +23,15 @@ passes it for dynamic and static-PIE links, and without it there is no
 PT_GNU_EH_FRAME segment, so C++ exceptions and `_Unwind_Backtrace`
 cannot find the unwind tables.
 
-Each test is linked three ways (static-PIE, static-PIE with RELR packed
-relocations, and plain static). Tests named `abort_*` / `segv_*` must die
+or dynamically against `libc.so`, which is also the dynamic linker. Name it
+as the program interpreter:
+
+    cc -nostdinc -isystem include -isystem $(cc -print-file-name=include) \
+       -nostdlib -pie -Wl,-z,now,-z,relro -Wl,--dynamic-linker=/path/to/libc.so \
+       -o prog lib/crt1.o prog.c lib/libc.so $(cc -print-libgcc-file-name)
+
+Each test is linked four ways: static-PIE, static-PIE with RELR packed
+relocations, plain static, and dynamic against `libc.so`. Tests named `abort_*` / `segv_*` must die
 with SIGABRT / SIGSEGV; they cover the fortify, stack-protector and
 allocator checks. A test may have a `.expected` file for its stdout.
 
@@ -77,6 +84,15 @@ allocator checks. A test may have a `.expected` file for its stdout.
 
 ## What's here
 
+- **Dynamic linking** (`src/ldso/`): `libc.so` is its own dynamic linker,
+  as in musl, so the loader and libc share one copy of TLS, malloc and
+  errno.
+  - Every symbol is bound at startup (no lazy binding), and the relocated
+    data is then made read-only.
+  - Text relocations and IFUNCs are refused.
+  - There is no symbol versioning: programs are built against this libc.
+  - Stage 1: a program and libc. Loading other shared libraries,
+    `dlopen` and debugger support are the next stages.
 - **Startup and runtime** (`src/start.c`, `src/runtime.c`, `src/arch/`):
   static-PIE relocation (including RELR), TLS, `exit`/`atexit`, errno,
   futex-based locks, `setjmp`/`longjmp`, `clone`.
@@ -162,5 +178,6 @@ allocator checks. A test may have a `.expected` file for its stdout.
 
 - Locales other than C/C.UTF-8.
 - Legacy password hashes (DES and MD5 `crypt`) are refused on purpose.
-- Dynamic linking: only static executables are supported.
+- Dynamic linking beyond a program and `libc.so`: other shared libraries
+  (DT_NEEDED), `dlopen`, and debugger support (`r_debug`).
 - Architectures other than x86_64.

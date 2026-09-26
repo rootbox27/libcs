@@ -243,9 +243,14 @@ void exit(int code)
 	if (__run_tls_dtors)
 		__run_tls_dtors();
 	run_exit_fns();
+#ifdef CITADEL_SHARED
+	/* every loaded object's destructors, in reverse load order */
+	__dl_fini();
+#else
 	size_t n = __fini_array_end - __fini_array_start;
 	while (n)
 		__fini_array_start[--n]();
+#endif
 	__stdio_exit();
 	_Exit(code);
 }

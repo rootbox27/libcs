@@ -29,20 +29,43 @@ endif
 
 # Everything reached from _start before the TCB is installed must not use
 # the stack protector (%fs is not valid yet).
-NOSSP = src/start.c
+NOSSP = src/start.c src/ldso/dynlink.c
 
-LIB_C   = $(filter-out src/crt1.c,$(wildcard src/*.c src/math/*.c src/omalloc/*.c))
+LIB_C   = $(filter-out src/crt1.c,$(wildcard src/*.c src/math/*.c src/omalloc/*.c src/ldso/*.c))
 LIB_S   = $(filter-out src/arch/crt1.S,$(wildcard src/arch/*.S))
 LIB_OBJ = $(patsubst src/%.c,obj/%.o,$(LIB_C)) $(patsubst src/%.S,obj/%.o,$(LIB_S))
 
-all: lib/libc.a lib/crt1.o
+# libc.so, which is also the dynamic linker: the same sources built as
+# position-independent code. TLS uses the initial-exec model (libc is
+# always loaded at startup); calls between libc's own functions bind
+# inside it, while its data stays interposable so that programs' copy
+# relocations work.
+PIC_OBJ = $(patsubst src/%.c,obj-pic/%.o,$(LIB_C)) $(patsubst src/%.S,obj-pic/%.o,$(LIB_S)) obj-pic/ldso/dlstart.o
+CFLAGS_PIC = -fPIC -DCITADEL_SHARED -ftls-model=initial-exec
+LIBGCC_LIB := $(shell $(CC) -print-libgcc-file-name)
+
+all: lib/libc.a lib/crt1.o lib/libc.so
 
 # -MMD: the compiler records every header each object uses (obj/*.d).
 obj/%.o: src/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS_LIB) $(CFLAGS_LIB) -MMD -MP $(if $(filter $<,$(NOSSP)),-fno-stack-protector) $(if $(filter src/math/%,$<),$(CFLAGS_MATH)) $(if $(filter src/omalloc/%,$<),$(CFLAGS_OMALLOC)) -c -o $@ $<
 
--include $(wildcard obj/*.d obj/*/*.d)
+-include $(wildcard obj/*.d obj/*/*.d obj-pic/*.d obj-pic/*/*.d)
+
+obj-pic/%.o: src/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS_LIB) $(CFLAGS_LIB) $(CFLAGS_PIC) -MMD -MP $(if $(filter $<,$(NOSSP)),-fno-stack-protector) $(if $(filter src/math/%,$<),$(CFLAGS_MATH)) $(if $(filter src/omalloc/%,$<),$(CFLAGS_OMALLOC)) -c -o $@ $<
+
+obj-pic/%.o: src/%.S
+	@mkdir -p $(dir $@)
+	$(CC) -fPIC -DCITADEL_SHARED -c -o $@ $<
+
+lib/libc.so: $(PIC_OBJ)
+	@mkdir -p lib
+	$(CC) -shared -nostdlib -Wl,-soname,libc.so -Wl,-e,_dlstart -Wl,-z,now -Wl,-z,relro \
+	      -Wl,-z,noexecstack -Wl,-Bsymbolic-functions -Wl,--exclude-libs,ALL -Wl,--hash-style=both \
+	      -o $@ $(PIC_OBJ) $(LIBGCC_LIB)
 
 obj/%.o: src/%.S
 	@mkdir -p $(dir $@)
@@ -79,6 +102,7 @@ LIBS_T     = -Wl,--start-group lib/libc.a $(LIBGCC_EH) $(LIBGCC) -Wl,--end-group
 PIE_BINS    = $(patsubst %,test/bin/pie/%,$(TEST_NAMES))
 RELR_BINS   = $(patsubst %,test/bin/relr/%,$(TEST_NAMES))
 STATIC_BINS = $(patsubst %,test/bin/static/%,$(TEST_NAMES))
+DYN_BINS    = $(patsubst %,test/bin/dyn/%,$(TEST_NAMES))
 
 TEST_DEPS = test/harness.h lib/libc.a lib/crt1.o $(wildcard include/*.h include/*/*.h)
 
@@ -94,11 +118,17 @@ test/bin/static/%: test/%.c $(TEST_DEPS)
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS_T) $(CFLAGS_T) $(LDFLAGS_T) -Wl,--eh-frame-hdr -static -o $@ lib/crt1.o $< $(LIBS_T)
 
-check: $(PIE_BINS) $(RELR_BINS) $(STATIC_BINS)
+# Dynamically linked against lib/libc.so, which is named as the program
+# interpreter by absolute path (nothing is installed).
+test/bin/dyn/%: test/%.c $(TEST_DEPS) lib/libc.so
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS_T) $(CFLAGS_T) $(LDFLAGS_T) -pie -Wl,--dynamic-linker=$(CURDIR)/lib/libc.so -o $@ lib/crt1.o $< lib/libc.so $(LIBGCC_EH) $(LIBGCC)
+
+check: $(PIE_BINS) $(RELR_BINS) $(STATIC_BINS) $(DYN_BINS)
 	@./test/run.sh $^
 
 clean:
-	rm -rf obj lib test/bin
+	rm -rf obj obj-pic lib test/bin
 
 .PHONY: all check clean
 .SECONDARY:
