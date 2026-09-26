@@ -6,6 +6,7 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/uio.h>
 #include <unistd.h>
 
@@ -676,4 +677,29 @@ FILE *tmpfile(void)
 	if (!f)
 		close(fd);
 	return f;
+}
+
+/* tmpnam can only return a name, which someone else may create before the
+ * caller does; mkstemp or tmpfile avoid that. The names here are hard to
+ * predict (72 random bits) and checked not to exist yet. */
+char *tmpnam(char *buf)
+{
+	static __thread char internal[L_tmpnam];
+	char name[] = P_tmpdir "/tmpnam_XXXXXXXXXXXX";
+	_Static_assert(sizeof name <= L_tmpnam, "L_tmpnam");
+	static const char set[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-";
+	for (int tries = 0; tries < TMP_MAX; tries++) {
+		unsigned char r[12];
+		__secure_random(r, sizeof r);
+		for (int i = 0; i < 12; i++)
+			name[sizeof name - 13 + i] = set[r[i] & 63];
+		struct stat st;
+		if (lstat(name, &st) < 0 && errno == ENOENT) {
+			if (!buf)
+				buf = internal;
+			memcpy(buf, name, sizeof name);
+			return buf;
+		}
+	}
+	return 0;
 }

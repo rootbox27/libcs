@@ -4,6 +4,7 @@
 #include <bits/alltypes.h>
 __BEGIN_DECLS
 typedef unsigned long wctype_t;
+typedef int wctrans_t;
 #ifndef WEOF
 #define WEOF 0xffffffffU
 #endif
@@ -12,5 +13,6 @@ int iswdigit(wint_t); int iswgraph(wint_t); int iswlower(wint_t); int iswprint(w
 int iswpunct(wint_t); int iswspace(wint_t); int iswupper(wint_t); int iswxdigit(wint_t);
 wint_t towlower(wint_t); wint_t towupper(wint_t);
 wctype_t wctype(const char *); int iswctype(wint_t, wctype_t);
+wctrans_t wctrans(const char *); wint_t towctrans(wint_t, wctrans_t);
 __END_DECLS
 #endif
