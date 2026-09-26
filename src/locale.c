@@ -50,6 +50,10 @@ locale_t uselocale(locale_t l)
 
 locale_t newlocale(int mask, const char *name, locale_t base)
 {
+	if ((mask & ~LC_ALL_MASK) || !name) {
+		errno = EINVAL;
+		return 0;
+	}
 	if (!known(name)) {
 		errno = ENOENT;
 		return 0;
@@ -59,4 +63,10 @@ locale_t newlocale(int mask, const char *name, locale_t base)
 
 void freelocale(locale_t l)
 {
+}
+
+/* every locale object is the one C locale */
+locale_t duplocale(locale_t l)
+{
+	return &c_locale;
 }

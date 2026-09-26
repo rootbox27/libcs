@@ -3,6 +3,7 @@
 #include <features.h>
 #define __need_size_t
 #include <stddef.h>
+#include <bits/locale_t.h>
 __BEGIN_DECLS
 int bcmp(const void *, const void *, size_t);
 void bcopy(const void *, void *, size_t);
@@ -14,5 +15,7 @@ int strcasecmp(const char *, const char *);
 int strncasecmp(const char *, const char *, size_t);
 char *index(const char *, int);
 char *rindex(const char *, int);
+int strcasecmp_l(const char *, const char *, locale_t);
+int strncasecmp_l(const char *, const char *, size_t, locale_t);
 __END_DECLS
 #endif

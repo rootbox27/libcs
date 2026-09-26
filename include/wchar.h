@@ -7,6 +7,7 @@
 #include <stddef.h>
 #include <stdarg.h>
 #include <bits/alltypes.h>
+#include <bits/locale_t.h>
 __BEGIN_DECLS
 typedef struct { unsigned __st, __n; } mbstate_t;
 #define WEOF 0xffffffffU
@@ -89,5 +90,13 @@ int swscanf(const wchar_t *__restrict, const wchar_t *__restrict, ...);
 int vfwscanf(FILE *__restrict, const wchar_t *__restrict, va_list);
 int vwscanf(const wchar_t *__restrict, va_list);
 int vswscanf(const wchar_t *__restrict, const wchar_t *__restrict, va_list);
+int wcscoll_l(const wchar_t *, const wchar_t *, locale_t);
+size_t wcsxfrm_l(wchar_t *__restrict, const wchar_t *__restrict, size_t, locale_t);
+size_t mbsnrtowcs(wchar_t *__restrict, const char **__restrict, size_t, size_t, mbstate_t *__restrict);
+size_t wcsnrtombs(char *__restrict, const wchar_t **__restrict, size_t, size_t, mbstate_t *__restrict);
+int wcscasecmp(const wchar_t *, const wchar_t *);
+int wcsncasecmp(const wchar_t *, const wchar_t *, size_t);
+int wcscasecmp_l(const wchar_t *, const wchar_t *, locale_t);
+int wcsncasecmp_l(const wchar_t *, const wchar_t *, size_t, locale_t);
 __END_DECLS
 #endif

@@ -4,6 +4,7 @@
 #include <bits/alltypes.h>
 #define __need_NULL
 #include <stddef.h>
+#include <bits/locale_t.h>
 __BEGIN_DECLS
 #define CLOCKS_PER_SEC 1000000L
 #define TIME_UTC 1
@@ -54,5 +55,6 @@ int timer_delete(timer_t);
 int timer_settime(timer_t, int, const struct itimerspec *__restrict, struct itimerspec *__restrict);
 int timer_gettime(timer_t, struct itimerspec *);
 int timer_getoverrun(timer_t);
+size_t strftime_l(char *__restrict, size_t, const char *__restrict, const struct tm *__restrict, locale_t);
 __END_DECLS
 #endif
