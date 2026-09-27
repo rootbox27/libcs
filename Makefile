@@ -124,8 +124,37 @@ test/bin/dyn/%: test/%.c $(TEST_DEPS) lib/libc.so
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS_T) $(CFLAGS_T) $(LDFLAGS_T) -pie -Wl,--dynamic-linker=$(CURDIR)/lib/libc.so -o $@ lib/crt1.o $< lib/libc.so $(LIBGCC_EH) $(LIBGCC)
 
-check: $(PIE_BINS) $(RELR_BINS) $(STATIC_BINS) $(DYN_BINS)
-	@./test/run.sh $^
+# Shared libraries (test/dso/): libta.so needs libtb.so through $ORIGIN;
+# dso_main uses both. alt/libtb.so differs only in tb_value, for
+# LD_LIBRARY_PATH; dso_missing needs a library that is not on its path.
+DSO      = test/bin/dso
+# -fsemantic-interposition: the test checks that the program can override a
+# library's function even for the library's own calls, which is ELF's rule
+# (GCC's default; Clang otherwise calls functions in the same file directly)
+DSO_LIB  = -fPIC -fsemantic-interposition -shared -Wl,-z,now,-z,relro -Wl,--enable-new-dtags
+DSO_EXE  = -pie -Wl,--dynamic-linker=$(CURDIR)/lib/libc.so -Wl,--enable-new-dtags -Wl,-rpath,'$$ORIGIN/lib'
+DSO_BINS = $(DSO)/dso_main $(DSO)/dso_alt $(DSO)/dso_missing
+
+$(DSO)/lib/libtb.so: test/dso/libtb.c lib/libc.so
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS_T) $(CFLAGS_T) $(LDFLAGS_T) $(DSO_LIB) -DTB_VALUE=2 -Wl,-soname,libtb.so -o $@ $< lib/libc.so
+$(DSO)/alt/libtb.so: test/dso/libtb.c lib/libc.so
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS_T) $(CFLAGS_T) $(LDFLAGS_T) $(DSO_LIB) -DTB_VALUE=3 -Wl,-soname,libtb.so -o $@ $< lib/libc.so
+$(DSO)/lib/libta.so: test/dso/libta.c $(DSO)/lib/libtb.so
+	$(CC) $(CPPFLAGS_T) $(CFLAGS_T) $(LDFLAGS_T) $(DSO_LIB) -Wl,-soname,libta.so -Wl,-rpath,'$$ORIGIN' -o $@ $< $(DSO)/lib/libtb.so lib/libc.so
+$(DSO)/nope/libnope.so: test/dso/libnope.c lib/libc.so
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS_T) $(CFLAGS_T) $(LDFLAGS_T) $(DSO_LIB) -Wl,-soname,libnope.so -o $@ $< lib/libc.so
+$(DSO)/dso_main: test/dso/main.c $(TEST_DEPS) $(DSO)/lib/libta.so
+	$(CC) $(CPPFLAGS_T) $(CFLAGS_T) $(LDFLAGS_T) $(DSO_EXE) -o $@ lib/crt1.o $< $(DSO)/lib/libta.so $(DSO)/lib/libtb.so lib/libc.so $(LIBGCC)
+$(DSO)/dso_alt: test/dso/alt.c $(TEST_DEPS) $(DSO)/lib/libtb.so $(DSO)/alt/libtb.so
+	$(CC) $(CPPFLAGS_T) $(CFLAGS_T) $(LDFLAGS_T) $(DSO_EXE) -o $@ lib/crt1.o $< $(DSO)/lib/libtb.so lib/libc.so $(LIBGCC)
+$(DSO)/dso_missing: test/dso/missing.c $(TEST_DEPS) $(DSO)/nope/libnope.so
+	$(CC) $(CPPFLAGS_T) $(CFLAGS_T) $(LDFLAGS_T) $(DSO_EXE) -o $@ lib/crt1.o $< $(DSO)/nope/libnope.so lib/libc.so $(LIBGCC)
+
+check: $(PIE_BINS) $(RELR_BINS) $(STATIC_BINS) $(DYN_BINS) $(DSO_BINS)
+	@./test/run.sh $(PIE_BINS) $(RELR_BINS) $(STATIC_BINS) $(DYN_BINS) $(DSO)/dso_main
 
 clean:
 	rm -rf obj obj-pic lib test/bin

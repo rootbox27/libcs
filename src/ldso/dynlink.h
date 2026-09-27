@@ -26,9 +26,17 @@ struct dso {
 	size_t init_n, fini_n, preinit_n;
 	int tls_id;                     /* 0: no TLS */
 	size_t tls_offset;              /* its block is at tp - tls_offset */
-	struct dso *next;
+	struct dso *next;               /* symbol search (load) order */
+	const char *shortname;          /* the name it was asked for by */
+	void *map;                      /* its mapping, for libraries */
+	size_t map_len;
+	unsigned long dev, ino;
+	struct dso **deps;              /* its DT_NEEDED, loaded */
+	int ndeps;
+	int in_list, visited;
 };
 
+hidden void __dls_relocate_self(long *sp);
 hidden uintptr_t __dls_start(long *sp);
 hidden void __dl_fini(void);
 hidden int __dl_object(int i, struct dl_phdr_info *info);

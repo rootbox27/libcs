@@ -1,0 +1,5 @@
+ctor tb
+ctor ta
+main
+dtor ta
+dtor tb

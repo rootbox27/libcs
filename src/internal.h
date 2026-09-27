@@ -190,7 +190,7 @@ hidden void __self_relocate(uintptr_t base, const Elf64_Dyn *dyn, int strict);
 hidden int __tls_add(const void *image, size_t filesz, size_t memsz, size_t align);
 hidden void __tls_layout(void);
 hidden void __copy_tls(uintptr_t tp);
-hidden void __setup_tcb(const unsigned char *rnd);
+hidden void __setup_tcb(const unsigned char *rnd, size_t surplus);
 hidden void __apply_relro(uintptr_t base, const Elf64_Phdr *ph, size_t phnum);
 hidden size_t *__auxv_of(char **envp, size_t *aux);
 hidden void __wipe_random(const size_t *aux);

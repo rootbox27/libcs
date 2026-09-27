@@ -31,7 +31,8 @@ as the program interpreter:
        -o prog lib/crt1.o prog.c lib/libc.so $(cc -print-libgcc-file-name)
 
 Each test is linked four ways: static-PIE, static-PIE with RELR packed
-relocations, plain static, and dynamic against `libc.so`. Tests named `abort_*` / `segv_*` must die
+relocations, plain static, and dynamic against `libc.so`. `test/dso/`
+tests shared libraries. Tests named `abort_*` / `segv_*` must die
 with SIGABRT / SIGSEGV; they cover the fortify, stack-protector and
 allocator checks. A test may have a `.expected` file for its stdout.
 
@@ -91,8 +92,19 @@ allocator checks. A test may have a `.expected` file for its stdout.
     data is then made read-only.
   - Text relocations and IFUNCs are refused.
   - There is no symbol versioning: programs are built against this libc.
-  - Stage 1: a program and libc. Loading other shared libraries,
-    `dlopen` and debugger support are the next stages.
+  - Shared libraries (DT_NEEDED) are searched for in `LD_LIBRARY_PATH`,
+    the requesting object's `DT_RPATH`/`DT_RUNPATH` (with `$ORIGIN`), then
+    the directory `libc.so` is in. Setuid/setgid programs ignore
+    `LD_LIBRARY_PATH` and `$ORIGIN`.
+  - A library with a segment that is both writable and executable is
+    refused.
+  - Symbols are searched in the program, then the libraries in
+    breadth-first load order. Constructors run dependencies first, and
+    destructors in reverse.
+  - Libraries' thread-local storage is static (in space reserved at
+    startup) and works in every TLS model, including `__tls_get_addr`.
+    TLSDESC is not supported yet.
+  - `dlopen` and debugger support are the next stages.
 - **Startup and runtime** (`src/start.c`, `src/runtime.c`, `src/arch/`):
   static-PIE relocation (including RELR), TLS, `exit`/`atexit`, errno,
   futex-based locks, `setjmp`/`longjmp`, `clone`.
@@ -178,6 +190,6 @@ allocator checks. A test may have a `.expected` file for its stdout.
 
 - Locales other than C/C.UTF-8.
 - Legacy password hashes (DES and MD5 `crypt`) are refused on purpose.
-- Dynamic linking beyond a program and `libc.so`: other shared libraries
-  (DT_NEEDED), `dlopen`, and debugger support (`r_debug`).
+- Dynamic linking: `dlopen`/`dlclose`, TLSDESC, running `libc.so`
+  directly as a program, and debugger support (`r_debug`).
 - Architectures other than x86_64.
