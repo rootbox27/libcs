@@ -1,0 +1,7 @@
+main
+ctor td
+ctor tc
+dtor tc
+atexit tc
+end
+dtor td

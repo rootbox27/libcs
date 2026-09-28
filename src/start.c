@@ -132,16 +132,21 @@ hidden void __copy_tls(uintptr_t tp)
 }
 
 /* Map the main thread's TLS and TCB, set the stack canary and pointer
- * guard from AT_RANDOM, and install the thread pointer. */
-hidden void __setup_tcb(const unsigned char *rnd)
+ * guard from AT_RANDOM, and install the thread pointer. `surplus` bytes
+ * are left free below the modules known now, for the TLS of shared
+ * libraries the dynamic linker loads later (address space only: pages
+ * that are never touched cost nothing). */
+hidden void __setup_tcb(const unsigned char *rnd, size_t surplus)
 {
-	size_t align = __libc.tls_align, off = __libc.tls_offset;
+	size_t align = __libc.tls_align, off = __libc.tls_offset + surplus;
 	size_t total = ROUND_UP(off + sizeof(struct pthread) + align, PAGE_SZ);
-	long m = __syscall6(SYS_mmap, 0, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	long m = __syscall6(SYS_mmap, 0, total, PROT_READ | PROT_WRITE,
+	                    MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
 	if (m < 0 && m > -4096)
 		__early_die();
 	uintptr_t tp = ROUND_UP((uintptr_t)m + off, align);
 	__copy_tls(tp);
+	__libc.tls_reserve = off;
 
 	struct pthread *p = (struct pthread *)tp;
 	uintptr_t c = 0, g = 0;
@@ -253,8 +258,24 @@ extern void (*const __preinit_array_end[])(void) __attribute__((__visibility__("
 extern void (*const __init_array_start[])(void) __attribute__((__visibility__("hidden"), __weak__));
 extern void (*const __init_array_end[])(void) __attribute__((__visibility__("hidden"), __weak__));
 
-/* Static executables: crt1's _start comes here with the initial stack. */
-__attribute__((__noreturn__, __used__)) void __citadel_start_c(long *sp, main_fn main)
+/* A static-PIE's relative relocations. This is a function of its own:
+ * the compiler may read any relocated constant (an address in
+ * .data.rel.ro) at the start of a function, so nothing that uses them may
+ * share a function with the code that applies them. */
+static __attribute__((__noinline__)) void static_relocate(long *sp)
+{
+	int argc = (int)sp[0];
+	char **envp = (char **)(sp + 1) + argc + 1;
+	size_t aux[AUX_CNT];
+	__auxv_of(envp, aux);
+	uintptr_t base = __ehdr_start.e_type == ET_DYN ? (uintptr_t)&__ehdr_start : 0;
+	const Elf64_Phdr *ph = (const Elf64_Phdr *)aux[AT_PHDR];
+	for (size_t i = 0; i < aux[AT_PHNUM]; i++)
+		if (ph[i].p_type == PT_DYNAMIC)
+			__self_relocate(base, (const Elf64_Dyn *)(base + ph[i].p_vaddr), 1);
+}
+
+static __attribute__((__noinline__, __noreturn__)) void static_start(long *sp, main_fn main)
 {
 	int argc = (int)sp[0];
 	char **argv = (char **)(sp + 1);
@@ -269,15 +290,11 @@ __attribute__((__noreturn__, __used__)) void __citadel_start_c(long *sp, main_fn
 	size_t phnum = aux[AT_PHNUM];
 
 	for (size_t i = 0; i < phnum; i++)
-		if (ph[i].p_type == PT_DYNAMIC)
-			__self_relocate(base, (const Elf64_Dyn *)(base + ph[i].p_vaddr), 1);
-
-	for (size_t i = 0; i < phnum; i++)
 		if (ph[i].p_type == PT_TLS)
 			__tls_add((const void *)(base + ph[i].p_vaddr), ph[i].p_filesz, ph[i].p_memsz, ph[i].p_align);
 	__tls_layout();
 	static const unsigned char zero_rnd[16];
-	__setup_tcb(aux[AT_RANDOM] ? (const unsigned char *)aux[AT_RANDOM] : zero_rnd);
+	__setup_tcb(aux[AT_RANDOM] ? (const unsigned char *)aux[AT_RANDOM] : zero_rnd, 0);
 	__wipe_random(aux);
 
 	__apply_relro(base, ph, phnum);
@@ -291,6 +308,13 @@ __attribute__((__noreturn__, __used__)) void __citadel_start_c(long *sp, main_fn
 		__init_array_start[i]();
 
 	exit(main(argc, argv, envp));
+}
+
+/* Static executables: crt1's _start comes here with the initial stack. */
+__attribute__((__noreturn__, __used__)) void __citadel_start_c(long *sp, main_fn main)
+{
+	static_relocate(sp);
+	static_start(sp, main);
 }
 
 #else

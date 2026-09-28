@@ -1,4 +1,5 @@
-/* <dlfcn.h> for static executables. */
+/* <dlfcn.h> for static executables (libc.so: ldso/dynlink.c). */
+#ifndef CITADEL_SHARED
 #include <dlfcn.h>
 #include <string.h>
 
@@ -44,3 +45,12 @@ int dladdr(const void *addr, Dl_info *info)
 	memset(info, 0, sizeof *info);
 	return 0;
 }
+
+int dlinfo(void *restrict h, int req, void *restrict arg)
+{
+	(void)req;
+	(void)arg;
+	err = h == &self ? "Unsupported request" : "Invalid handle";
+	return -1;
+}
+#endif

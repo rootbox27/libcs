@@ -26,6 +26,19 @@ struct link_map {
 	struct link_map *l_next, *l_prev;
 };
 
+/* The debugger interface: DT_DEBUG in the program points at _r_debug;
+ * the dynamic linker calls r_brk (_dl_debug_state) before and after it
+ * changes the object list, with r_state saying what is happening. */
+struct r_debug {
+	int r_version;
+	struct link_map *r_map;
+	ElfW(Addr) r_brk;
+	enum { RT_CONSISTENT, RT_ADD, RT_DELETE } r_state;
+	ElfW(Addr) r_ldbase;
+};
+extern struct r_debug _r_debug;
+void _dl_debug_state(void);
+
 int dl_iterate_phdr(int (*)(struct dl_phdr_info *, size_t, void *), void *);
 
 __END_DECLS

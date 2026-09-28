@@ -93,6 +93,8 @@ typedef Elf64_Xword Elf64_Relr;
 #define DF_BIND_NOW 0x8
 #define DF_STATIC_TLS 0x10
 #define DF_1_NOW 0x1
+#define DF_1_NODELETE 0x8
+#define DF_1_NOOPEN 0x40
 #define DF_1_PIE 0x08000000
 #define SHN_ABS 0xfff1
 #define STT_NOTYPE 0
@@ -115,6 +117,8 @@ typedef Elf64_Xword Elf64_Relr;
 #define R_X86_64_DTPMOD64 16
 #define R_X86_64_DTPOFF64 17
 #define R_X86_64_TPOFF64 18
+#define R_X86_64_TLSDESC_CALL 35
+#define R_X86_64_TLSDESC 36
 #define R_X86_64_IRELATIVE 37
 #define ET_NONE 0
 #define ET_REL 1

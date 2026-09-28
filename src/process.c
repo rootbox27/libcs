@@ -20,6 +20,8 @@ extern hidden long __setxid(long, long, long, long) __attribute__((__weak__));
 extern hidden void __thread_list_lock(void) __attribute__((__weak__));
 extern hidden void __thread_list_unlock(void) __attribute__((__weak__));
 extern hidden void __thread_list_fork_child(void) __attribute__((__weak__));
+/* libc.so: no thread may be inside dlopen either */
+extern hidden void __dl_atfork(int) __attribute__((__weak__));
 
 static long setxid(long nr, long a, long b, long c)
 {
@@ -62,6 +64,8 @@ pid_t fork(void)
 		if (atfork_tab[i].prepare)
 			atfork_tab[i].prepare();
 
+	if (__dl_atfork)
+		__dl_atfork(-1);
 	/* no thread may be inside malloc when the heap is copied */
 	__malloc_atfork(-1);
 	sigset_t all, old;
@@ -86,6 +90,8 @@ pid_t fork(void)
 	}
 	__sys(SYS_rt_sigprocmask, SIG_SETMASK, &old, 0, 8);
 	__malloc_atfork(r == 0 ? 1 : 0);
+	if (__dl_atfork)
+		__dl_atfork(r == 0 ? 1 : 0);
 
 	for (size_t i = 0; i < n; i++) {
 		void (*fn)(void) = r == 0 ? atfork_tab[i].child : atfork_tab[i].parent;
