@@ -7,6 +7,8 @@ int tb_counter = 100;
 __thread int tb_gd = 11;
 __attribute__((tls_model("initial-exec"))) __thread int tb_ie = 22;
 static __thread int tb_local = 33;
+static int tb_target;
+__thread int *tb_ptr = &tb_target; /* the TLS image holds a relocated pointer */
 __attribute__((weak)) void tb_missing(void);
 
 int tb_value(void) { return TB_VALUE; }
@@ -15,6 +17,7 @@ int *tb_gd_addr(void) { return &tb_gd; }
 int *tb_ie_addr(void) { return &tb_ie; }
 int *tb_local_addr(void) { return &tb_local; }
 int tb_has_missing(void) { return tb_missing != 0; }
+int tb_ptr_ok(void) { return tb_ptr == &tb_target; }
 
 __attribute__((constructor)) static void ctor(void) { log_event("ctor tb"); }
 __attribute__((destructor)) static void dtor(void) { log_event("dtor tb"); }

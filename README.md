@@ -32,7 +32,7 @@ as the program interpreter:
 
 Each test is linked four ways: static-PIE, static-PIE with RELR packed
 relocations, plain static, and dynamic against `libc.so`. `test/dso/`
-tests shared libraries. Tests named `abort_*` / `segv_*` must die
+tests shared libraries, `dlopen` and running `libc.so` directly. Tests named `abort_*` / `segv_*` must die
 with SIGABRT / SIGSEGV; they cover the fortify, stack-protector and
 allocator checks. A test may have a `.expected` file for its stdout.
 
@@ -94,17 +94,38 @@ allocator checks. A test may have a `.expected` file for its stdout.
   - There is no symbol versioning: programs are built against this libc.
   - Shared libraries (DT_NEEDED) are searched for in `LD_LIBRARY_PATH`,
     the requesting object's `DT_RPATH`/`DT_RUNPATH` (with `$ORIGIN`), then
-    the directory `libc.so` is in. Setuid/setgid programs ignore
-    `LD_LIBRARY_PATH` and `$ORIGIN`.
+    the directory `libc.so` is in. `LD_PRELOAD` libraries are loaded
+    first. Setuid/setgid programs ignore `LD_LIBRARY_PATH`, `LD_PRELOAD`
+    and `$ORIGIN`.
   - A library with a segment that is both writable and executable is
     refused.
   - Symbols are searched in the program, then the libraries in
-    breadth-first load order. Constructors run dependencies first, and
-    destructors in reverse.
-  - Libraries' thread-local storage is static (in space reserved at
-    startup) and works in every TLS model, including `__tls_get_addr`.
-    TLSDESC is not supported yet.
-  - `dlopen` and debugger support are the next stages.
+    breadth-first load order, then `RTLD_GLOBAL` objects. Constructors run
+    dependencies first, and destructors in reverse.
+  - `dlopen`, `dlsym` (with `RTLD_DEFAULT` and `RTLD_NEXT`), `dlclose`,
+    `dlerror`, `dladdr` and `dlinfo`. Every mode binds immediately. A
+    failed `dlopen` unloads whatever it had loaded and runs nothing.
+  - `dlclose` runs the destructors and the library's `atexit` handlers,
+    then unmaps what no handle needs. Some objects stay loaded, because
+    unmapping them could leave dangling pointers:
+    - libraries with thread-local storage;
+    - `NODELETE` libraries;
+    - libraries that registered a `thread_local` destructor;
+    - libraries another library was bound to without depending on them.
+  - Thread-local storage is all static. The main thread reserves space
+    for the libraries loaded at startup, and every thread reserves 256 KiB
+    more for `dlopen`. So `__tls_get_addr` and TLS descriptors (TLSDESC)
+    are plain arithmetic, and initial-exec TLS works even in a
+    `dlopen`'d library. When a library is loaded, its TLS is set up in
+    threads that already exist.
+  - Debuggers find the libraries through `DT_DEBUG`/`_r_debug` and stop in
+    `_dl_debug_state` when the list changes, so gdb sees libraries
+    loaded at startup and by `dlopen`.
+  - `libc.so` can also be run as a program:
+    - `libc.so prog args` loads and runs `prog`, which can be PIE or not.
+    - `libc.so --list prog` lists the libraries `prog` loads, as `ldd`
+      does.
+    - It does the same when run under the name `ldd`.
 - **Startup and runtime** (`src/start.c`, `src/runtime.c`, `src/arch/`):
   static-PIE relocation (including RELR), TLS, `exit`/`atexit`, errno,
   futex-based locks, `setjmp`/`longjmp`, `clone`.
@@ -190,6 +211,6 @@ allocator checks. A test may have a `.expected` file for its stdout.
 
 - Locales other than C/C.UTF-8.
 - Legacy password hashes (DES and MD5 `crypt`) are refused on purpose.
-- Dynamic linking: `dlopen`/`dlclose`, TLSDESC, running `libc.so`
-  directly as a program, and debugger support (`r_debug`).
+- Dynamic linking: lazy binding (on purpose), symbol versioning,
+  IFUNCs, and thread-local storage beyond the static reserve.
 - Architectures other than x86_64.

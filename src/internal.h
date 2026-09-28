@@ -126,7 +126,7 @@ static inline struct pthread *__self(void)
 
 /* ---- global runtime state ---------------------------------------------- */
 #define AUX_CNT 64
-#define TLS_MODS_MAX 16
+#define TLS_MODS_MAX 64
 struct libc_state {
 	size_t *auxv;
 	int secure;             /* AT_SECURE: setuid/setgid or capabilities */
@@ -139,6 +139,7 @@ struct libc_state {
 	} tls_mods[TLS_MODS_MAX];
 	int tls_count;
 	size_t tls_align, tls_offset;
+	size_t tls_reserve;     /* static TLS space each thread has (>= tls_offset) */
 	int dynamic;            /* started by the dynamic linker (libc.so) */
 	uintptr_t ptr_guard;    /* secret for pointer mangling */
 	uintptr_t canary;
@@ -195,7 +196,12 @@ hidden void __apply_relro(uintptr_t base, const Elf64_Phdr *ph, size_t phnum);
 hidden size_t *__auxv_of(char **envp, size_t *aux);
 hidden void __wipe_random(const size_t *aux);
 hidden void __init_libc(int argc, char **argv, char **envp, const size_t *aux);
+struct dl_phdr_info;
+hidden int __vdso_info(struct dl_phdr_info *info);
 hidden void __dl_fini(void); /* libc.so only */
+hidden void __dl_pin(const void *addr) __attribute__((__weak__)); /* libc.so only */
+hidden void __exit_fns_in_range(uintptr_t lo, uintptr_t hi);
+hidden void __for_each_thread(void (*fn)(struct pthread *, void *), void *arg);
 hidden void *__mmap_raw(size_t len);
 hidden void __secure_random(void *buf, size_t len);
 

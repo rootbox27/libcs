@@ -146,6 +146,7 @@ hidden void __setup_tcb(const unsigned char *rnd, size_t surplus)
 		__early_die();
 	uintptr_t tp = ROUND_UP((uintptr_t)m + off, align);
 	__copy_tls(tp);
+	__libc.tls_reserve = off;
 
 	struct pthread *p = (struct pthread *)tp;
 	uintptr_t c = 0, g = 0;

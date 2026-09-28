@@ -2,9 +2,10 @@
 #define _DLFCN_H
 #include <features.h>
 __BEGIN_DECLS
-/* Only static executables are supported: dlopen always fails, but
- * dlopen(NULL) and dlsym on it behave as for a program with no dynamic
- * symbols. */
+/* In a static executable dlopen always fails, but dlopen(NULL) and dlsym
+ * on it behave as for a program with no dynamic symbols. Dynamically
+ * linked programs (libc.so) have the full interface; every mode binds
+ * immediately (RTLD_LAZY is RTLD_NOW). */
 #define RTLD_LAZY 1
 #define RTLD_NOW 2
 #define RTLD_NOLOAD 4
@@ -24,6 +25,13 @@ int dlclose(void *);
 void *dlsym(void *__restrict, const char *__restrict);
 char *dlerror(void);
 int dladdr(const void *, Dl_info *);
+
+/* dlinfo requests (the values are glibc's) */
+#define RTLD_DI_LINKMAP 2    /* struct link_map * */
+#define RTLD_DI_ORIGIN 6     /* char[PATH_MAX]: the object's directory */
+#define RTLD_DI_TLS_MODID 9  /* size_t: its TLS module id, 0 if none */
+#define RTLD_DI_TLS_DATA 10  /* void *: this thread's TLS block, or 0 */
+int dlinfo(void *__restrict, int, void *__restrict);
 
 /* _dl_find_object (glibc 2.35): the object containing an address and its
  * PT_GNU_EH_FRAME segment. GCC's unwinder uses it to find the unwind

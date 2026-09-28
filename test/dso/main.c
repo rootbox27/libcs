@@ -17,6 +17,7 @@ int *tb_gd_addr(void);
 int *tb_ie_addr(void);
 int *tb_local_addr(void);
 int tb_has_missing(void);
+int tb_ptr_ok(void);
 extern int tb_counter;       /* copied into the program */
 extern __thread int ta_tls;  /* another module's TLS, used directly */
 
@@ -55,17 +56,17 @@ static void *thread_fn(void *arg)
 {
 	int *r = arg;
 	/* a new thread starts with every library's initial TLS values */
-	r[0] = *tb_gd_addr() == 11 && *tb_ie_addr() == 22 && *tb_local_addr() == 33 && ta_tls == 44;
+	r[0] = *tb_gd_addr() == 11 && *tb_ie_addr() == 22 && *tb_local_addr() == 33 && ta_tls == 44 && tb_ptr_ok();
 	*tb_gd_addr() = 1000;
 	ta_tls = 2000;
 	r[2] = (int)(long)tb_gd_addr() != 0;
 	return 0;
 }
 
-static int run(const char *path, char **env)
+static int run_argv(char **argv, char **env)
 {
 	pid_t pid;
-	char *argv[] = { (char *)path, 0 };
+	const char *path = argv[0];
 	int fd = open("/dev/null", O_WRONLY);
 	posix_spawn_file_actions_t fa;
 	posix_spawn_file_actions_init(&fa);
@@ -79,6 +80,12 @@ static int run(const char *path, char **env)
 	return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
 }
 
+static int run(const char *path, char **env)
+{
+	char *argv[] = { (char *)path, 0 };
+	return run_argv(argv, env);
+}
+
 int main(int argc, char **argv)
 {
 	log_event("main");
@@ -87,6 +94,7 @@ int main(int argc, char **argv)
 	CHECK(tb_counter == 100 && tb_bump() == 101 && tb_counter == 101);
 	CHECK(*tb_gd_addr() == 11 && *tb_ie_addr() == 22 && *tb_local_addr() == 33 && ta_tls == 44);
 	CHECK(!tb_has_missing());
+	CHECK(tb_ptr_ok());
 
 	int r[3] = { 0 };
 	pthread_t t;
@@ -118,5 +126,17 @@ int main(int argc, char **argv)
 	strcat(env, "/alt");
 	char *altenv[] = { env, 0 };
 	CHECK(run(path, altenv) == 3);
+	/* LD_PRELOAD comes first; its soname satisfies DT_NEEDED */
+	strcpy(env, "LD_PRELOAD=");
+	strcat(env, dir);
+	strcat(env, "/alt/libtb.so");
+	CHECK(run(path, altenv) == 3);
+	/* libc.so run as a program runs the one named by its argument */
+	char *direct[] = { LIBC_SO, path, 0 };
+	CHECK(run_argv(direct, environ) == 2);
+	char *list[] = { LIBC_SO, "--list", path, 0 };
+	CHECK(run_argv(list, environ) == 0);
+	char *usage[] = { LIBC_SO, 0 };
+	CHECK(run_argv(usage, environ) == 1);
 	return t_done();
 }

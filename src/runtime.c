@@ -137,7 +137,7 @@ void abort(void)
 }
 
 /* ---- atexit / __cxa_atexit ---- */
-struct exit_fn { uintptr_t fn, arg; int cxa; };
+struct exit_fn { uintptr_t fn, arg; void *dso; int cxa; }; /* cxa < 0: already run */
 struct exit_block {
 	struct exit_block *next;
 	int n;
@@ -147,7 +147,7 @@ static struct exit_block exit_head;
 static struct exit_block *exit_cur;
 static volatile int exit_lock;
 
-static int add_exit(uintptr_t fn, uintptr_t arg, int cxa)
+static int add_exit(uintptr_t fn, uintptr_t arg, void *dso, int cxa)
 {
 	LOCK(exit_lock);
 	if (!exit_cur)
@@ -165,6 +165,7 @@ static int add_exit(uintptr_t fn, uintptr_t arg, int cxa)
 	struct exit_fn *f = &exit_cur->fns[exit_cur->n++];
 	f->fn = __ptr_mangle(fn);
 	f->arg = arg;
+	f->dso = dso;
 	f->cxa = cxa;
 	UNLOCK(exit_lock);
 	return 0;
@@ -172,13 +173,52 @@ static int add_exit(uintptr_t fn, uintptr_t arg, int cxa)
 
 int __cxa_atexit(void (*fn)(void *), void *arg, void *dso)
 {
-	(void)dso;
-	return add_exit((uintptr_t)fn, (uintptr_t)arg, 1);
+	return add_exit((uintptr_t)fn, (uintptr_t)arg, dso, 1);
 }
 
 int atexit(void (*fn)(void))
 {
-	return add_exit((uintptr_t)fn, 0, 0);
+	return add_exit((uintptr_t)fn, 0, 0, 0);
+}
+
+static void call_exit_fn(struct exit_fn f)
+{
+	uintptr_t fn = __ptr_demangle(f.fn);
+	if (f.cxa)
+		((void (*)(void *))fn)((void *)f.arg);
+	else
+		((void (*)(void))fn)();
+}
+
+/* Run, newest first, the handlers whose function or object handle lies
+ * in [lo, hi): those of a library dlclose is about to unmap. */
+hidden void __exit_fns_in_range(uintptr_t lo, uintptr_t hi)
+{
+	LOCK(exit_lock);
+	for (struct exit_block *b = exit_cur; b; b = b == &exit_head ? 0 : b->next) {
+		for (int i = b->n; i-- > 0;) {
+			struct exit_fn *f = &b->fns[i];
+			if (f->cxa < 0)
+				continue;
+			uintptr_t fn = __ptr_demangle(f->fn);
+			if (fn - lo >= hi - lo && (uintptr_t)f->dso - lo >= hi - lo)
+				continue;
+			struct exit_fn copy = *f;
+			f->cxa = -1;
+			UNLOCK(exit_lock);
+			call_exit_fn(copy);
+			LOCK(exit_lock);
+		}
+	}
+	UNLOCK(exit_lock);
+}
+
+/* The C++ runtime of a shared object calls this with its handle when it
+ * is unloaded. */
+void __cxa_finalize(void *dso)
+{
+	if (dso)
+		__exit_fns_in_range((uintptr_t)dso, (uintptr_t)dso + 1);
 }
 
 void *__dso_handle = &__dso_handle;
@@ -189,12 +229,10 @@ static void run_exit_fns(void)
 	while (exit_cur) {
 		while (exit_cur->n > 0) {
 			struct exit_fn f = exit_cur->fns[--exit_cur->n];
+			if (f.cxa < 0)
+				continue;
 			UNLOCK(exit_lock);
-			uintptr_t fn = __ptr_demangle(f.fn);
-			if (f.cxa)
-				((void (*)(void *))fn)((void *)f.arg);
-			else
-				((void (*)(void))fn)();
+			call_exit_fn(f);
 			LOCK(exit_lock);
 		}
 		exit_cur = exit_cur == &exit_head ? 0 : exit_cur->next;

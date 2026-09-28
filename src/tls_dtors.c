@@ -19,7 +19,11 @@ struct tls_dtor {
 
 int __cxa_thread_atexit_impl(void (*fn)(void *), void *obj, void *dso)
 {
-	(void)dso; /* static binaries: no object can be unloaded */
+	/* the object that registers it cannot be unloaded any more */
+	if (__dl_pin) {
+		__dl_pin(dso);
+		__dl_pin((void *)fn);
+	}
 	struct tls_dtor *d = malloc(sizeof *d);
 	if (!d)
 		return -1;

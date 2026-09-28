@@ -196,6 +196,17 @@ static void list_del(struct pthread *p)
 }
 
 hidden void __thread_list_lock(void) { __lock(&list_lock); }
+
+/* fn on every live thread, with the list locked */
+hidden void __for_each_thread(void (*fn)(struct pthread *, void *), void *arg)
+{
+	__lock(&list_lock);
+	struct pthread *self = __self();
+	fn(self, arg);
+	for (struct pthread *p = self->next; p && p != self; p = p->next)
+		fn(p, arg);
+	__unlock(&list_lock);
+}
 hidden void __thread_list_unlock(void) { __unlock(&list_lock); }
 
 /* in a fork child: we are the only thread */
@@ -286,7 +297,7 @@ int pthread_create(pthread_t *__restrict res, const pthread_attr_t *__restrict a
 	size_t stack = ROUND_UP(attr->__stacksize ? attr->__stacksize : DEFAULT_STACK, PAGE_SZ);
 	size_t guard = ROUND_UP(attr->__guardsize, PAGE_SZ);
 	size_t align = __libc.tls_align;
-	size_t tls = __libc.tls_offset;
+	size_t tls = __libc.tls_reserve;
 	size_t top = ROUND_UP(tls + sizeof(struct pthread) + align, PAGE_SZ);
 	size_t size = guard + stack + top;
 
@@ -300,7 +311,6 @@ int pthread_create(pthread_t *__restrict res, const pthread_attr_t *__restrict a
 	/* TCB at the top (aligned), TLS block just below it */
 	uintptr_t tp = ROUND_DOWN((uintptr_t)(map + size - sizeof(struct pthread)), align);
 	struct pthread *p = (struct pthread *)tp;
-	__copy_tls(tp);
 	p->self = p;
 	p->canary = __libc.canary;
 	p->ptr_guard = __libc.ptr_guard;
@@ -321,6 +331,10 @@ int pthread_create(pthread_t *__restrict res, const pthread_attr_t *__restrict a
 		__malloc_threads_start();
 	__libc.threaded = 1;
 	__lock(&list_lock);
+	/* under the lock: dlopen initialises a new library's TLS in every
+	 * thread on the list, and this one has either the new module or is
+	 * on the list by then */
+	__copy_tls(tp);
 	block_all(&old);
 	p->sigmask_saved = old;
 	__atomic_fetch_add(&__thread_count, 1, __ATOMIC_SEQ_CST);

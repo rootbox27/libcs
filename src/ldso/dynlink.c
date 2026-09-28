@@ -3,56 +3,126 @@
  * state: TLS, malloc, errno.
  *
  * Policy:
- *  - every symbol is bound at startup (no lazy binding), and the
- *    relocated data (GOTs included) is then made read-only (RELRO);
+ *  - every symbol is bound when its object is loaded (no lazy binding),
+ *    and the relocated data (GOTs included) is then made read-only;
  *  - text relocations and IFUNCs are refused;
  *  - no symbol versioning: programs are built against this libc.
  *
  * Libraries (DT_NEEDED) are searched in LD_LIBRARY_PATH, the requesting
  * object's DT_RPATH/DT_RUNPATH ($ORIGIN allowed), then the directory
- * libc.so is in. Setuid/setgid programs ignore LD_LIBRARY_PATH and
- * $ORIGIN. Symbols are searched in the program, then the libraries in
- * breadth-first load order; constructors run dependencies first.
- * Libraries' static TLS goes in space reserved below the main thread's
- * blocks, so the thread pointer never moves.
+ * libc.so is in. Setuid/setgid programs ignore LD_LIBRARY_PATH,
+ * LD_PRELOAD and $ORIGIN. Symbols are searched in the global scope (the
+ * program, then the libraries in breadth-first load order, then
+ * RTLD_GLOBAL objects), then, for a dlopen'd object, the closure it was
+ * loaded with. Constructors run dependencies first.
  *
- * Not yet: dlopen (only dlopen(NULL) works), debugger support.
+ * Thread-local storage is all static: every module's block lies at a
+ * fixed offset below each thread's pointer. The main thread reserves
+ * space for the libraries loaded at startup and every thread reserves
+ * DLOPEN_TLS more for dlopen, so __tls_get_addr and TLS descriptors are
+ * plain arithmetic, and a library's initial-exec TLS works too.
+ *
+ * dlclose unloads the objects no handle needs any more, unless they have
+ * TLS, are marked NODELETE, registered a thread_local destructor or had
+ * symbols bound by an object outside their own dependency closure: those
+ * stay (their memory could otherwise still be referenced).
+ *
+ * Debuggers find the object list through DT_DEBUG and _r_debug, and stop
+ * in _dl_debug_state whenever it changes.
+ *
+ * Run as a program, libc.so loads and runs the program named by its first
+ * argument (libc.so [--list] program [args]); --list, or being run as
+ * "ldd", prints the libraries the program would load instead.
  *
  * Built only into libc.so (CITADEL_SHARED), without the stack protector:
  * __dls_start runs before the thread pointer exists. */
 #ifdef CITADEL_SHARED
 #include "internal.h"
 #include "ldso/dynlink.h"
+#include <dlfcn.h>
 #include <elf.h>
 #include <fcntl.h>
 #include <link.h>
+#include <setjmp.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/auxv.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define MAX_DSO 128
-#define MAX_DEPS 1024
-/* static TLS left free for libraries (address space; see __setup_tcb) */
+/* the loader's memory before malloc can be used */
+#define STARTUP_ARENA (128 << 10)
+/* static TLS reserved in the main thread for startup libraries, and in
+ * every thread for dlopen (address space: untouched pages cost nothing) */
 #define TLS_SURPLUS (1 << 20)
+#define DLOPEN_TLS (256 << 10)
+
+extern const Elf64_Ehdr __ehdr_start __attribute__((__visibility__("hidden")));
+hidden void __tlsdesc_static(void);
 
 static struct dso app, self;
-hidden struct dso *__dso_head;
-static struct dso *dso_tail;
-static int dso_count;
-
-/* The loader cannot use malloc (it needs environ, which is only set once
- * the program is relocated), so its memory is static. */
-static struct dso pool[MAX_DSO];
-static int pool_used;
-static struct dso *deps_pool[MAX_DEPS];
-static int deps_used;
-static char names[32768];
-static size_t names_used;
+static struct dso *head, *tail;
+static int self_listed;
+static unsigned long long adds, subs;
+static struct dso *fini_head;
+static int started;        /* startup is over: allocate with malloc, fail softly */
+static unsigned mark_gen;
 
 static int secure;
-static const char *env_library_path;
+static const char *env_library_path, *env_preload;
+
+/* ---- the debugger interface ---- */
+
+struct r_debug _r_debug;
+
+__attribute__((__noinline__, __used__)) void _dl_debug_state(void)
+{
+	__asm__ __volatile__("" ::: "memory");
+}
+
+static void debug_event(int state)
+{
+	_r_debug.r_state = state;
+	_dl_debug_state();
+}
+
+/* ---- the lock: recursive, as constructors may call dlopen ---- */
+
+static volatile int lock_word;
+static int lock_owner, lock_depth;
+
+static void dl_lock(void)
+{
+	int tid = __self()->tid;
+	if (__atomic_load_n(&lock_owner, __ATOMIC_RELAXED) == tid) {
+		lock_depth++;
+		return;
+	}
+	__lock(&lock_word);
+	__atomic_store_n(&lock_owner, tid, __ATOMIC_RELAXED);
+	lock_depth = 1;
+}
+
+static void dl_unlock(void)
+{
+	if (--lock_depth)
+		return;
+	__atomic_store_n(&lock_owner, 0, __ATOMIC_RELAXED);
+	__unlock(&lock_word);
+}
+
+/* fork: taken around it; the child is the one thread holding it */
+hidden void __dl_atfork(int phase)
+{
+	if (phase < 0) {
+		dl_lock();
+		return;
+	}
+	if (phase > 0)
+		__atomic_store_n(&lock_owner, __self()->tid, __ATOMIC_RELAXED);
+	dl_unlock();
+}
 
 /* ---- messages (raw writes: usable at any point) ---- */
 
@@ -68,14 +138,150 @@ static __attribute__((__noreturn__)) void fatal(const char *a, const char *b, co
 {
 	say("libc.so: ");
 	say(a);
-	if (b) {
+	if (b)
 		say(b);
-		if (c)
-			say(c);
-	}
+	if (c)
+		say(c);
 	say("\n");
 	__syscall1(SYS_exit_group, 127);
 	for (;;) ;
+}
+
+/* Errors: fatal at startup; in dlopen, the message is kept for dlerror
+ * and dlopen undoes everything it did. */
+static jmp_buf *fail_jb;
+static char fail_msg[512];
+static int cur_fd = -1;
+
+static __attribute__((__noreturn__)) void fail(const char *a, const char *b, const char *c)
+{
+	if (!fail_jb)
+		fatal(a, b, c);
+	const char *parts[3] = { a, b, c };
+	size_t n = 0;
+	for (int i = 0; i < 3; i++)
+		for (const char *p = parts[i]; p && *p && n < sizeof fail_msg - 1; p++)
+			fail_msg[n++] = *p;
+	fail_msg[n] = 0;
+	longjmp(*fail_jb, 1);
+}
+
+static _Thread_local char err_buf[256];
+static _Thread_local int err_set;
+
+static void set_error(const char *a, const char *b)
+{
+	size_t n = 0;
+	for (const char *p = a; *p && n < sizeof err_buf - 1; p++)
+		err_buf[n++] = *p;
+	for (const char *p = b; p && *p && n < sizeof err_buf - 1; p++)
+		err_buf[n++] = *p;
+	err_buf[n] = 0;
+	err_set = 1;
+}
+
+/* ---- memory ---- */
+
+static _Alignas(16) char arena[STARTUP_ARENA];
+static size_t arena_used;
+
+/* zeroed memory */
+static void *dl_alloc(size_t n)
+{
+	if (!started) {
+		n = ROUND_UP(n, 16);
+		if (n > sizeof arena - arena_used)
+			fatal("out of memory", 0, 0);
+		void *p = arena + arena_used;
+		arena_used += n;
+		return p;
+	}
+	void *p = calloc(1, n ? n : 1);
+	if (!p)
+		fail("out of memory", 0, 0);
+	return p;
+}
+
+static char *dl_strdup(const char *s, size_t l)
+{
+	char *p = dl_alloc(l + 1);
+	memcpy(p, s, l);
+	p[l] = 0;
+	return p;
+}
+
+static void free_dso(struct dso *d)
+{
+	if (!d->allocated)
+		return;
+	free(d->name);
+	free((char *)d->shortname);
+	free(d->deps);
+	free(d->scope);
+	free(d);
+}
+
+/* ---- the object list ---- */
+
+static void append(struct dso *d)
+{
+	d->prev = tail;
+	d->next = 0;
+	if (tail)
+		tail->next = d;
+	else
+		head = d;
+	tail = d;
+	adds++;
+}
+
+static void unlink_dso(struct dso *d)
+{
+	if (d->prev)
+		d->prev->next = d->next;
+	else
+		head = d->next;
+	if (d->next)
+		d->next->prev = d->prev;
+	else
+		tail = d->prev;
+	subs++;
+}
+
+static void set_extent(struct dso *d)
+{
+	uintptr_t lo = UINTPTR_MAX, hi = 0;
+	for (size_t i = 0; i < d->phnum; i++) {
+		const Elf64_Phdr *p = &d->phdr[i];
+		if (p->p_type != PT_LOAD)
+			continue;
+		if (p->p_vaddr < lo)
+			lo = p->p_vaddr;
+		if (p->p_vaddr + p->p_memsz > hi)
+			hi = p->p_vaddr + p->p_memsz;
+	}
+	if (lo < hi) {
+		d->map = (void *)(d->base + ROUND_DOWN(lo, PAGE_SZ));
+		d->map_len = ROUND_UP(hi, PAGE_SZ) - ROUND_DOWN(lo, PAGE_SZ);
+	}
+}
+
+/* the object whose address range holds addr (not inlined: GCC takes
+ * its loop for a variable live across dlopen's setjmp) */
+static __attribute__((__noinline__)) struct dso *addr_dso(uintptr_t addr)
+{
+	for (struct dso *d = head; d; d = d->next)
+		if (addr - (uintptr_t)d->map < d->map_len)
+			return d;
+	return 0;
+}
+
+static struct dso *valid_handle(void *h)
+{
+	for (struct dso *d = head; d; d = d->next)
+		if (d == h)
+			return d;
+	return 0;
 }
 
 /* ---- reading an object's dynamic section ---- */
@@ -92,7 +298,7 @@ static void decode(struct dso *d)
 		}
 	}
 	if (!d->dynv)
-		fatal("no dynamic section in ", d->name, 0);
+		fail("no dynamic section in ", d->path, 0);
 	for (const Elf64_Dyn *v = d->dynv; v->d_tag; v++) {
 		uintptr_t a = d->base + v->d_un.d_ptr;
 		switch (v->d_tag) {
@@ -114,16 +320,19 @@ static void decode(struct dso *d)
 		case DT_FINI_ARRAYSZ: d->fini_n = v->d_un.d_val / sizeof(void *); break;
 		case DT_PREINIT_ARRAY: d->preinit_array = (void (**)(void))a; break;
 		case DT_PREINIT_ARRAYSZ: d->preinit_n = v->d_un.d_val / sizeof(void *); break;
+		case DT_FLAGS_1: d->flags_1 = v->d_un.d_val; break;
 		case DT_TEXTREL:
-			fatal("text relocations are not supported: ", d->name, 0);
+			fail("text relocations are not supported: ", d->path, 0);
 		case DT_FLAGS:
 			if (v->d_un.d_val & DF_TEXTREL)
-				fatal("text relocations are not supported: ", d->name, 0);
+				fail("text relocations are not supported: ", d->path, 0);
 			break;
 		}
 	}
 	if (!d->syms || !d->strings || (!d->hashtab && !d->ghashtab))
-		fatal("incomplete dynamic section in ", d->name, 0);
+		fail("incomplete dynamic section in ", d->path, 0);
+	if (d->flags_1 & DF_1_NODELETE)
+		d->nodelete = 1;
 }
 
 /* ---- symbol lookup ---- */
@@ -151,28 +360,38 @@ static int defined(const Elf64_Sym *s)
 	int type = ELF64_ST_TYPE(s->st_info), bind = ELF64_ST_BIND(s->st_info);
 	return s->st_shndx != SHN_UNDEF && (bind == STB_GLOBAL || bind == STB_WEAK) &&
 	       (type == STT_NOTYPE || type == STT_OBJECT || type == STT_FUNC || type == STT_COMMON ||
-	        type == STT_TLS);
+	        type == STT_TLS || type == STT_GNU_IFUNC);
 }
 
-static const Elf64_Sym *lookup_in(const struct dso *d, const char *name, uint32_t gh, uint32_t sh)
+struct name {
+	const char *s;
+	uint32_t gh, sh;
+};
+
+static struct name mkname(const char *s)
+{
+	return (struct name){ s, gnu_hash(s), sysv_hash(s) };
+}
+
+static const Elf64_Sym *lookup_in(const struct dso *d, const struct name *n)
 {
 	if (d->ghashtab) {
 		const uint32_t *ht = d->ghashtab;
 		uint32_t nbuckets = ht[0], symoffset = ht[1], bloom_size = ht[2], shift = ht[3];
 		const uint64_t *bloom = (const uint64_t *)(ht + 4);
-		uint64_t word = bloom[(gh / 64) % bloom_size];
-		uint64_t mask = (1ul << (gh % 64)) | (1ul << ((gh >> shift) % 64));
+		uint64_t word = bloom[(n->gh / 64) % bloom_size];
+		uint64_t mask = (1ul << (n->gh % 64)) | (1ul << ((n->gh >> shift) % 64));
 		if ((word & mask) != mask)
 			return 0;
 		const uint32_t *buckets = (const uint32_t *)(bloom + bloom_size);
 		const uint32_t *chain = buckets + nbuckets;
-		uint32_t i = buckets[gh % nbuckets];
+		uint32_t i = buckets[n->gh % nbuckets];
 		if (!i)
 			return 0;
 		for (;; i++) {
 			uint32_t h2 = chain[i - symoffset];
 			const Elf64_Sym *s = &d->syms[i];
-			if ((gh | 1) == (h2 | 1) && defined(s) && !strcmp(name, d->strings + s->st_name))
+			if ((n->gh | 1) == (h2 | 1) && defined(s) && !strcmp(n->s, d->strings + s->st_name))
 				return s;
 			if (h2 & 1)
 				return 0;
@@ -181,32 +400,57 @@ static const Elf64_Sym *lookup_in(const struct dso *d, const char *name, uint32_
 	const uint32_t *ht = d->hashtab;
 	uint32_t nbucket = ht[0];
 	const uint32_t *bucket = ht + 2, *chain = bucket + nbucket;
-	for (uint32_t i = bucket[sh % nbucket]; i; i = chain[i]) {
+	for (uint32_t i = bucket[n->sh % nbucket]; i; i = chain[i]) {
 		const Elf64_Sym *s = &d->syms[i];
-		if (defined(s) && !strcmp(name, d->strings + s->st_name))
+		if (defined(s) && !strcmp(n->s, d->strings + s->st_name))
 			return s;
 	}
 	return 0;
 }
 
-/* The first definition in search order (the program, then its
- * libraries), skipping `skip` (for COPY relocations). */
-static const Elf64_Sym *lookup(const char *name, const struct dso *skip, struct dso **where)
+static const Elf64_Sym *lookup_scope(struct dso *const *scope, int n, const struct name *nm, const struct dso *skip,
+                                     struct dso **where)
 {
-	uint32_t gh = gnu_hash(name), sh = sysv_hash(name);
-	for (struct dso *d = __dso_head; d; d = d->next) {
-		if (d == skip)
+	for (int i = 0; i < n; i++) {
+		if (scope[i] == skip)
 			continue;
-		const Elf64_Sym *s = lookup_in(d, name, gh, sh);
+		const Elf64_Sym *s = lookup_in(scope[i], nm);
 		if (s) {
-			*where = d;
+			*where = scope[i];
 			return s;
 		}
 	}
 	return 0;
 }
 
+/* The global scope, then `local` (the closure an object was loaded with),
+ * skipping `skip` (for COPY relocations). */
+static const Elf64_Sym *lookup(const struct name *nm, struct dso *const *local, int nlocal, const struct dso *skip,
+                               struct dso **where)
+{
+	for (struct dso *d = head; d; d = d->next) {
+		if (!d->global || d == skip)
+			continue;
+		const Elf64_Sym *s = lookup_in(d, nm);
+		if (s) {
+			*where = d;
+			return s;
+		}
+	}
+	return lookup_scope(local, nlocal, nm, skip, where);
+}
+
 /* ---- relocation ---- */
+
+/* mark d's dependency closure with a fresh generation */
+static void mark_closure(struct dso *d, unsigned gen)
+{
+	if (d->mark == gen)
+		return;
+	d->mark = gen;
+	for (int i = 0; i < d->ndeps; i++)
+		mark_closure(d->deps[i], gen);
+}
 
 static void relocate_table(struct dso *d, const Elf64_Rela *r, size_t size, int skip_relative)
 {
@@ -229,14 +473,21 @@ static void relocate_table(struct dso *d, const Elf64_Rela *r, size_t size, int 
 			if (ELF64_ST_BIND(sym->st_info) == STB_LOCAL) {
 				def = sym;
 			} else {
-				def = lookup(name, type == R_X86_64_COPY ? d : 0, &dd);
+				struct name nm = mkname(name);
+				def = lookup(&nm, d->lscope, d->nlscope, type == R_X86_64_COPY ? d : 0, &dd);
 				if (!def && ELF64_ST_BIND(sym->st_info) != STB_WEAK)
-					fatal("symbol not found: ", name, 0);
+					fail("symbol not found: ", name, 0);
 			}
+			if (def && ELF64_ST_TYPE(def->st_info) == STT_GNU_IFUNC)
+				fail("IFUNC symbols are not supported: ", name, 0);
+			/* bound to an object this one does not depend on: it
+			 * must outlive this one */
+			if (def && dd != d && !dd->permanent && dd->mark != mark_gen)
+				dd->nodelete = 1;
 		}
 		uintptr_t value = def ? dd->base + def->st_value : 0;
-		if (def && ELF64_ST_TYPE(def->st_info) == STT_GNU_IFUNC)
-			fatal("IFUNC symbols are not supported: ", d->strings + sym->st_name, 0);
+		/* TLS: an offset in the defining module's block */
+		uintptr_t tlsval = (def ? def->st_value : 0) + r[i].r_addend;
 		switch (type) {
 		case R_X86_64_64:
 			*where = value + r[i].r_addend;
@@ -247,29 +498,36 @@ static void relocate_table(struct dso *d, const Elf64_Rela *r, size_t size, int 
 			break;
 		case R_X86_64_COPY:
 			if (!def)
-				fatal("copy relocation of a missing symbol: ", d->strings + sym->st_name, 0);
+				fail("copy relocation of a missing symbol: ", d->strings + sym->st_name, 0);
 			memcpy(where, (const void *)value, sym->st_size);
 			break;
 		case R_X86_64_TPOFF64:
 			/* variant II: the module's block is at tp - tls_offset */
-			*where = (def ? def->st_value : 0) + r[i].r_addend - dd->tls_offset;
+			*where = tlsval - dd->tls_offset;
 			break;
 		case R_X86_64_DTPMOD64:
-			*where = def ? (uintptr_t)dd->tls_id : (uintptr_t)d->tls_id;
+			*where = (uintptr_t)dd->tls_id;
 			break;
 		case R_X86_64_DTPOFF64:
-			*where = (def ? def->st_value : 0) + r[i].r_addend;
+			*where = tlsval;
+			break;
+		case R_X86_64_TLSDESC:
+			/* every block is static: the descriptor holds the
+			 * offset from the thread pointer */
+			where[0] = (uintptr_t)__tlsdesc_static;
+			where[1] = tlsval - dd->tls_offset;
 			break;
 		case R_X86_64_IRELATIVE:
-			fatal("IFUNC relocations are not supported in ", d->name, 0);
+			fail("IFUNC relocations are not supported in ", d->path, 0);
 		default:
-			fatal("unsupported relocation type in ", d->name, 0);
+			fail("unsupported relocation type in ", d->path, 0);
 		}
 	}
 }
 
 static void relocate(struct dso *d, int self_done)
 {
+	mark_closure(d, ++mark_gen);
 	if (!self_done) {
 		/* RELR holds only relative relocations */
 		const Elf64_Relr *r = d->relr;
@@ -291,74 +549,62 @@ static void relocate(struct dso *d, int self_done)
 		relocate_table(d, d->rela, d->relasz, self_done);
 	if (d->jmprel)
 		relocate_table(d, d->jmprel, d->jmprelsz, self_done);
+	d->relocated = 1;
 }
 
 static void protect_relro(const struct dso *d)
 {
 	uintptr_t s = ROUND_DOWN(d->relro_start, PAGE_SZ), e = ROUND_DOWN(d->relro_end, PAGE_SZ);
 	if (e > s && __syscall3(SYS_mprotect, s, e - s, PROT_READ) < 0)
-		fatal("cannot protect relocated data of ", d->name, 0);
+		fail("cannot protect relocated data of ", d->path, 0);
 }
 
-/* ---- loading libraries ---- */
+/* ---- loading ---- */
 
-static char *save(const char *a, size_t al, const char *b, size_t bl)
-{
-	if (names_used + al + bl + 1 > sizeof names)
-		fatal("too many library names", 0, 0);
-	char *p = names + names_used;
-	memcpy(p, a, al);
-	memcpy(p + al, b, bl);
-	p[al + bl] = 0;
-	names_used += al + bl + 1;
-	return p;
-}
-
-static void append(struct dso *d)
-{
-	if (dso_tail)
-		dso_tail->next = d;
-	else
-		__dso_head = d;
-	dso_tail = d;
-	d->next = 0;
-	dso_count++;
-}
-
-/* Map the ELF shared object open on fd into d. */
-static void map_library(int fd, struct dso *d)
+/* Map the ELF object open on fd into d: a shared library, or with exec a
+ * program too (libc.so run directly). Returns its entry point. */
+static uintptr_t map_library(int fd, struct dso *d, int exec)
 {
 	Elf64_Ehdr eh;
 	if (pread(fd, &eh, sizeof eh, 0) != sizeof eh || memcmp(eh.e_ident, ELFMAG, SELFMAG) ||
-	    eh.e_ident[EI_CLASS] != ELFCLASS64 || eh.e_machine != EM_X86_64 || eh.e_type != ET_DYN ||
-	    eh.e_phentsize != sizeof(Elf64_Phdr) || !eh.e_phnum || eh.e_phnum > 64)
-		fatal("not an x86-64 shared library: ", d->name, 0);
+	    eh.e_ident[EI_CLASS] != ELFCLASS64 || eh.e_machine != EM_X86_64 ||
+	    !(eh.e_type == ET_DYN || (exec && eh.e_type == ET_EXEC)) || eh.e_phentsize != sizeof(Elf64_Phdr) ||
+	    !eh.e_phnum || eh.e_phnum > 64)
+		fail(exec ? "not an x86-64 program: " : "not an x86-64 shared library: ", d->path, 0);
 	Elf64_Phdr ph[64];
 	size_t phsz = eh.e_phnum * sizeof *ph;
 	if (pread(fd, ph, phsz, (off_t)eh.e_phoff) != (ssize_t)phsz)
-		fatal("cannot read ", d->name, 0);
+		fail("cannot read ", d->path, 0);
 
 	uintptr_t lo = UINTPTR_MAX, hi = 0;
 	for (int i = 0; i < eh.e_phnum; i++) {
 		if (ph[i].p_type != PT_LOAD)
 			continue;
 		if ((ph[i].p_flags & PF_W) && (ph[i].p_flags & PF_X))
-			fatal("writable and executable segment in ", d->name, 0);
+			fail("writable and executable segment in ", d->path, 0);
 		if (ph[i].p_filesz > ph[i].p_memsz || (ph[i].p_vaddr - ph[i].p_offset) % PAGE_SZ)
-			fatal("malformed segment in ", d->name, 0);
+			fail("malformed segment in ", d->path, 0);
 		if (ph[i].p_vaddr < lo)
 			lo = ph[i].p_vaddr;
 		if (ph[i].p_vaddr + ph[i].p_memsz > hi)
 			hi = ph[i].p_vaddr + ph[i].p_memsz;
 	}
 	if (lo >= hi)
-		fatal("nothing to load in ", d->name, 0);
+		fail("nothing to load in ", d->path, 0);
 	lo = ROUND_DOWN(lo, PAGE_SZ);
 	hi = ROUND_UP(hi, PAGE_SZ);
-	/* reserve the whole range; gaps between segments stay inaccessible */
-	void *r = mmap(0, hi - lo, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-	if (r == MAP_FAILED)
-		fatal("out of address space loading ", d->name, 0);
+	/* reserve the whole range; gaps between segments stay inaccessible.
+	 * A non-PIE program goes where it was linked, if that is free. */
+	int fixed = eh.e_type == ET_EXEC;
+	void *r = mmap(fixed ? (void *)lo : 0, hi - lo, PROT_NONE,
+	               MAP_PRIVATE | MAP_ANONYMOUS | (fixed ? MAP_FIXED_NOREPLACE : 0), -1, 0);
+	if (r == MAP_FAILED || (fixed && r != (void *)lo)) {
+		if (r != MAP_FAILED)
+			munmap(r, hi - lo);
+		fail("cannot reserve address space for ", d->path, 0);
+	}
+	d->map = r;
+	d->map_len = hi - lo;
 	uintptr_t base = (uintptr_t)r - lo;
 	for (int i = 0; i < eh.e_phnum; i++) {
 		const Elf64_Phdr *p = &ph[i];
@@ -371,11 +617,11 @@ static void map_library(int fd, struct dso *d)
 		uintptr_t file_end = base + p->p_vaddr + p->p_filesz;
 		uintptr_t mem_end = base + p->p_vaddr + p->p_memsz;
 		if (p->p_filesz && mmap((void *)va, file_end - va, prot, MAP_PRIVATE | MAP_FIXED, fd, off) == MAP_FAILED)
-			fatal("cannot map ", d->name, 0);
+			fail("cannot map ", d->path, 0);
 		if (mem_end > file_end) {
 			/* .bss: the rest of the last file page, then fresh pages */
 			if (!(prot & PROT_WRITE))
-				fatal("read-only .bss in ", d->name, 0);
+				fail("read-only .bss in ", d->path, 0);
 			uintptr_t page_end = ROUND_UP(file_end, PAGE_SZ);
 			if (p->p_filesz)
 				memset((void *)file_end, 0, (page_end < mem_end ? page_end : mem_end) - file_end);
@@ -384,12 +630,10 @@ static void map_library(int fd, struct dso *d)
 			if (mem_end > page_end &&
 			    mmap((void *)page_end, ROUND_UP(mem_end, PAGE_SZ) - page_end, prot,
 			         MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS, -1, 0) == MAP_FAILED)
-				fatal("cannot map ", d->name, 0);
+				fail("cannot map ", d->path, 0);
 		}
 	}
 	d->base = base;
-	d->map = r;
-	d->map_len = hi - lo;
 	/* the program headers, as mapped (they are in the first segment) */
 	d->phdr = 0;
 	for (int i = 0; i < eh.e_phnum; i++) {
@@ -400,8 +644,9 @@ static void map_library(int fd, struct dso *d)
 		}
 	}
 	if (!d->phdr)
-		fatal("program headers not loaded in ", d->name, 0);
+		fail("program headers not loaded in ", d->path, 0);
 	d->phnum = eh.e_phnum;
+	return base + eh.e_entry;
 }
 
 /* Try one directory (length dl) for name; returns an open fd or -1. */
@@ -470,29 +715,49 @@ static size_t dir_len(const char *path)
 	return slash ? (size_t)(slash - path) : 0;
 }
 
-static struct dso *load_library(const char *name, struct dso *needer)
+static void list_self(void)
 {
-	/* libc.so is us */
-	const char *base = strrchr(name, '/') ? strrchr(name, '/') + 1 : name;
-	if (!strcmp(base, "libc.so")) {
-		if (!self.in_list)
-			self.in_list = 1, append(&self);
-		return &self;
+	if (!self_listed) {
+		self_listed = 1;
+		append(&self);
 	}
-	for (struct dso *d = __dso_head; d; d = d->next)
+}
+
+static struct dso *find_loaded(const char *name)
+{
+	const char *base = strrchr(name, '/') ? strrchr(name, '/') + 1 : name;
+	if (!strcmp(base, "libc.so"))
+		return &self;
+	for (struct dso *d = head; d; d = d->next) {
 		if (d->shortname && !strcmp(d->shortname, name))
 			return d;
+		const char *soname = d->dynv && d != &app ? dyn_string(d, DT_SONAME) : 0;
+		if (soname && !strcmp(soname, name))
+			return d;
+	}
+	return 0;
+}
+
+/* Load name for needer (whose paths are searched). `direct`: asked for
+ * by the program or dlopen, not by a library. */
+static struct dso *load_library(const char *name, struct dso *needer, int direct)
+{
+	struct dso *d = find_loaded(name);
+	if (d == &self)
+		list_self();
+	if (d)
+		return d;
 
 	char path[4096];
 	int fd = -1;
 	if (strchr(name, '/')) {
 		size_t l = strlen(name);
 		if (l >= sizeof path)
-			fatal("library path too long: ", name, 0);
+			fail("library path too long: ", name, 0);
 		memcpy(path, name, l + 1);
 		fd = open(path, O_RDONLY | O_CLOEXEC);
 	} else {
-		const char *origin = needer->name;
+		const char *origin = needer->path;
 		size_t ol = dir_len(origin);
 		const char *runpath = dyn_string(needer, DT_RUNPATH);
 		const char *rpath = runpath ? 0 : dyn_string(needer, DT_RPATH);
@@ -504,88 +769,152 @@ static struct dso *load_library(const char *name, struct dso *needer)
 			fd = search(runpath, name, origin, ol, path, sizeof path);
 		if (fd < 0) {
 			/* the directory libc.so is in */
-			size_t sl = dir_len(self.name);
-			fd = try_dir(self.name, sl ? sl : 1, name, 0, 0, path, sizeof path);
+			size_t sl = dir_len(self.path);
+			fd = try_dir(self.path, sl ? sl : 1, name, 0, 0, path, sizeof path);
 		}
 	}
 	if (fd < 0)
-		fatal("cannot find library ", name, needer == &app ? "" : " (needed by a library)");
+		fail("cannot find library ", name, direct ? "" : " (needed by a library)");
+	cur_fd = fd;
 
 	struct stat st;
 	if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode))
-		fatal("not a regular file: ", path, 0);
+		fail("not a regular file: ", path, 0);
 	/* the same file under another name is the same library */
-	for (struct dso *d = __dso_head; d; d = d->next) {
-		if (d->dev == st.st_dev && d->ino == st.st_ino && d != &app) {
+	for (d = head; d; d = d->next) {
+		if (d != &app && d != &self && d->dev == st.st_dev && d->ino == st.st_ino) {
 			close(fd);
+			cur_fd = -1;
 			return d;
 		}
 	}
-	if (pool_used == MAX_DSO)
-		fatal("too many libraries", 0, 0);
-	struct dso *d = &pool[pool_used++];
-	d->name = save(path, strlen(path), "", 0);
-	d->shortname = save(name, strlen(name), "", 0);
+	d = dl_alloc(sizeof *d);
+	d->allocated = (unsigned char)started;
+	d->name = dl_strdup(path, strlen(path));
+	d->path = d->name;
+	d->shortname = dl_strdup(name, strlen(name));
 	d->dev = st.st_dev;
 	d->ino = st.st_ino;
-	map_library(fd, d);
+	d->global = d->permanent = !started;
+	append(d); /* first, so that a failure below unmaps it */
+	map_library(fd, d, 0);
 	close(fd);
+	cur_fd = -1;
 	decode(d);
-	d->in_list = 1;
-	append(d);
+	if (started && (d->flags_1 & DF_1_PIE))
+		fail("cannot load a program as a library: ", path, 0);
 	return d;
 }
 
-/* Load every dependency, breadth first; the list order is the symbol
- * search order. Each object's dependencies are recorded for the
- * constructor order. */
-static void load_deps(void)
+/* Load the dependencies of every object from `from` on, breadth first;
+ * the list order is the symbol search order. The program's LD_PRELOAD
+ * libraries come first among its dependencies. */
+static void load_deps(struct dso *from)
 {
-	for (struct dso *d = __dso_head; d; d = d->next) {
-		size_t n = 0;
+	for (struct dso *d = from; d; d = d->next) {
+		if (d->deps)
+			continue;
+		size_t n = 0, np = 0;
 		for (const Elf64_Dyn *v = d->dynv; v->d_tag; v++)
 			n += v->d_tag == DT_NEEDED;
-		if (deps_used + n > MAX_DEPS)
-			fatal("too many dependencies", 0, 0);
-		d->deps = &deps_pool[deps_used];
-		deps_used += (int)n;
+		const char *pre = d == &app && !secure ? env_preload : 0;
+		for (const char *p = pre; p && *p; p++)
+			np += *p != ' ' && *p != ':' && (p == pre || p[-1] == ' ' || p[-1] == ':');
+		d->deps = dl_alloc((n + np + 1) * sizeof *d->deps);
+		while (pre && *pre) {
+			size_t l = strcspn(pre, " :");
+			if (l) {
+				char buf[4096];
+				if (l >= sizeof buf)
+					fail("LD_PRELOAD entry too long", 0, 0);
+				memcpy(buf, pre, l);
+				buf[l] = 0;
+				d->deps[d->ndeps++] = load_library(buf, d, 1);
+			}
+			pre += l;
+			if (*pre)
+				pre++;
+		}
 		for (const Elf64_Dyn *v = d->dynv; v->d_tag; v++)
 			if (v->d_tag == DT_NEEDED)
-				d->deps[d->ndeps++] = load_library(d->strings + v->d_un.d_val, d);
+				d->deps[d->ndeps++] = load_library(d->strings + v->d_un.d_val, d, d == &app);
 	}
-	if (!self.in_list)
-		self.in_list = 1, append(&self);
 }
 
-/* Static TLS for the libraries, below the program's and libc's. */
-static void setup_library_tls(size_t limit)
+/* A handle's dependency closure, breadth first. */
+static void make_scope(struct dso *h)
 {
-	for (struct dso *d = __dso_head; d; d = d->next) {
-		if (d == &app || d == &self)
+	if (h->scope)
+		return;
+	int n = 0;
+	for (struct dso *d = head; d; d = d->next)
+		n++;
+	struct dso **q = dl_alloc((size_t)n * sizeof *q);
+	unsigned gen = ++mark_gen;
+	int len = 1;
+	q[0] = h;
+	h->mark = gen;
+	for (int i = 0; i < len; i++) {
+		for (int k = 0; k < q[i]->ndeps; k++) {
+			struct dso *dep = q[i]->deps[k];
+			if (dep->mark != gen) {
+				dep->mark = gen;
+				q[len++] = dep;
+			}
+		}
+	}
+	h->scope = q;
+	h->nscope = len;
+}
+
+/* ---- thread-local storage ---- */
+
+/* Give each object from `from` on that has TLS a static block; `limit` is
+ * the space every thread has. */
+static int assign_tls(struct dso *from, size_t limit)
+{
+	int any = 0;
+	for (struct dso *d = from; d; d = d->next) {
+		if (d->tls_id || d == &app || d == &self)
 			continue;
 		for (size_t i = 0; i < d->phnum; i++) {
 			const Elf64_Phdr *p = &d->phdr[i];
-			if (p->p_type == PT_TLS && p->p_memsz)
-				d->tls_id = __tls_add((const void *)(d->base + p->p_vaddr), p->p_filesz, p->p_memsz,
-				                      p->p_align);
+			if (p->p_type != PT_TLS || !p->p_memsz)
+				continue;
+			/* the thread pointers are aligned for the modules
+			 * known when the threads were made */
+			if (p->p_align > __libc.tls_align)
+				fail("thread-local storage alignment too large in ", d->path, 0);
+			if (__libc.tls_count >= TLS_MODS_MAX)
+				fail("too many modules with thread-local storage", 0, 0);
+			d->tls_id = __tls_add((const void *)(d->base + p->p_vaddr), p->p_filesz, p->p_memsz, p->p_align);
+			any = 1;
 		}
 	}
 	__tls_layout();
 	if (__libc.tls_offset > limit)
-		fatal("the libraries' thread-local storage is too large", 0, 0);
-	uintptr_t tp = (uintptr_t)__self();
-	for (struct dso *d = __dso_head; d; d = d->next) {
+		fail("out of static thread-local storage loading ", tail->path, 0);
+	for (struct dso *d = from; d; d = d->next)
+		if (d->tls_id)
+			d->tls_offset = __libc.tls_mods[d->tls_id - 1].offset;
+	return any;
+}
+
+/* (Re)initialise the blocks of the objects from `from` on in thread t. */
+static void init_tls(struct pthread *t, void *arg)
+{
+	for (struct dso *d = arg; d; d = d->next) {
 		if (!d->tls_id)
 			continue;
 		const struct tls_mod *m = &__libc.tls_mods[d->tls_id - 1];
-		d->tls_offset = m->offset;
-		if (d != &app && d != &self)
-			memcpy((void *)(tp - m->offset), m->image, m->filesz);
+		unsigned char *b = (unsigned char *)t - m->offset;
+		memcpy(b, m->image, m->filesz);
+		memset(b + m->filesz, 0, m->memsz - m->filesz);
 	}
 }
 
-/* __tls_get_addr: general-dynamic TLS access. Every module loaded at
- * startup has static TLS, so this is plain arithmetic. */
+/* __tls_get_addr: general-dynamic TLS access. Every module has static
+ * TLS, so this is plain arithmetic. */
 typedef struct {
 	unsigned long ti_module, ti_offset;
 } tls_index;
@@ -597,23 +926,25 @@ void *__tls_get_addr(tls_index *ti)
 
 /* ---- constructors and destructors ---- */
 
-static struct dso *init_order[MAX_DSO + 2];
-static int init_n;
-
 /* dependencies before the objects that need them (depth-first
- * post-order from the program) */
-static void order_init(struct dso *d)
+ * post-order); only objects not yet visited */
+static void order_init(struct dso *d, struct dso **out, int *n)
 {
 	if (d->visited)
 		return;
 	d->visited = 1;
 	for (int i = 0; i < d->ndeps; i++)
-		order_init(d->deps[i]);
-	init_order[init_n++] = d;
+		order_init(d->deps[i], out, n);
+	out[(*n)++] = d;
 }
 
-static void run_init(const struct dso *d)
+static void run_init(struct dso *d)
 {
+	/* on the destructor list first: exit() from a constructor still
+	 * runs this object's destructors */
+	d->inited = 1;
+	d->fini_next = fini_head;
+	fini_head = d;
 	for (size_t i = 0; i < d->preinit_n; i++)
 		d->preinit_array[i]();
 	if (d->init)
@@ -622,16 +953,24 @@ static void run_init(const struct dso *d)
 		d->init_array[i]();
 }
 
+static void run_fini(const struct dso *d)
+{
+	for (size_t i = d->fini_n; i-- > 0;)
+		d->fini_array[i]();
+	if (d->fini)
+		((void (*)(void))d->fini)();
+}
+
 /* exit(): destructors in the reverse order of the constructors */
 hidden void __dl_fini(void)
 {
-	for (int k = init_n; k-- > 0;) {
-		const struct dso *d = init_order[k];
-		for (size_t i = d->fini_n; i-- > 0;)
-			d->fini_array[i]();
-		if (d->fini)
-			((void (*)(void))d->fini)();
+	dl_lock();
+	struct dso *d;
+	while ((d = fini_head)) {
+		fini_head = d->fini_next;
+		run_fini(d);
 	}
+	dl_unlock();
 }
 
 /* ---- the entry point: called by _dlstart with the initial stack ----
@@ -644,52 +983,137 @@ hidden void __dl_fini(void)
 
 hidden __attribute__((__noinline__)) void __dls_relocate_self(long *sp)
 {
-	int argc = (int)sp[0];
-	char **envp = (char **)(sp + 1) + argc + 1;
-	size_t aux[AUX_CNT];
-	__auxv_of(envp, aux);
-	uintptr_t base = aux[AT_BASE];
-	if (!base) {
-		/* run as a program: nothing is relocated, so no messages */
-		__syscall1(SYS_exit_group, 127);
-		for (;;) ;
-	}
-	const Elf64_Ehdr *eh = (const Elf64_Ehdr *)base;
-	const Elf64_Phdr *ph = (const Elf64_Phdr *)(base + eh->e_phoff);
-	for (size_t i = 0; i < eh->e_phnum; i++)
+	(void)sp;
+	uintptr_t base = (uintptr_t)&__ehdr_start;
+	const Elf64_Phdr *ph = (const Elf64_Phdr *)(base + __ehdr_start.e_phoff);
+	for (size_t i = 0; i < __ehdr_start.e_phnum; i++)
 		if (ph[i].p_type == PT_DYNAMIC)
 			__self_relocate(base, (const Elf64_Dyn *)(base + ph[i].p_vaddr), 0);
 }
 
-hidden uintptr_t __dls_start(long *sp)
+static void say_hex(uintptr_t v)
 {
+	char buf[19];
+	buf[0] = '0';
+	buf[1] = 'x';
+	int n = 2;
+	for (int s = 60; s >= 0; s -= 4)
+		if (v >> s || s == 0 || n > 2)
+			buf[n++] = "0123456789abcdef"[(v >> s) & 15];
+	buf[n] = 0;
+	say(buf);
+}
+
+/* ldd: what the program loads, and where */
+static __attribute__((__noreturn__)) void list_objects(void)
+{
+	for (struct dso *d = head; d; d = d->next) {
+		if (d == &app)
+			continue;
+		say("\t");
+		say(d == &self ? "libc.so" : d->shortname);
+		say(" => ");
+		say(d->path);
+		say(" (");
+		say_hex((uintptr_t)d->map);
+		say(")\n");
+	}
+	__syscall1(SYS_exit_group, 0);
+	for (;;) ;
+}
+
+static const char *base_name(const char *s)
+{
+	const char *b = strrchr(s, '/');
+	return b ? b + 1 : s;
+}
+
+hidden uintptr_t __dls_start(long **spp)
+{
+	long *sp = *spp;
 	int argc = (int)sp[0];
 	char **argv = (char **)(sp + 1);
 	char **envp = argv + argc + 1;
 	size_t aux[AUX_CNT];
-	__auxv_of(envp, aux);
+	size_t *auxv = __auxv_of(envp, aux);
 
 	/* 1. ourselves: __dls_relocate_self has applied the relative
 	 * relocations */
-	uintptr_t base = aux[AT_BASE];
-	const Elf64_Ehdr *eh = (const Elf64_Ehdr *)base;
+	uintptr_t base = (uintptr_t)&__ehdr_start;
 	self.base = base;
-	self.phdr = (const Elf64_Phdr *)(base + eh->e_phoff);
-	self.phnum = eh->e_phnum;
+	self.phdr = (const Elf64_Phdr *)(base + __ehdr_start.e_phoff);
+	self.phnum = __ehdr_start.e_phnum;
+	self.name = (char *)"libc.so";
+	self.shortname = "libc.so";
+	self.global = self.permanent = 1;
+	set_extent(&self);
+	secure = aux[AT_SECURE] != 0 || aux[AT_UID] != aux[AT_EUID] || aux[AT_GID] != aux[AT_EGID];
 
-	/* 2. the program */
-	app.phdr = (const Elf64_Phdr *)aux[AT_PHDR];
-	app.phnum = aux[AT_PHNUM];
-	app.base = 0;
-	for (size_t i = 0; i < app.phnum; i++)
-		if (app.phdr[i].p_type == PT_PHDR)
-			app.base = aux[AT_PHDR] - app.phdr[i].p_vaddr;
-	/* its path, for $ORIGIN */
-	app.name = aux[AT_EXECFN] ? (const char *)aux[AT_EXECFN] : argc > 0 && argv[0] ? argv[0] : "";
-	self.name = "libc.so";
-	for (size_t i = 0; i < app.phnum; i++)
-		if (app.phdr[i].p_type == PT_INTERP)
-			self.name = (const char *)(app.base + app.phdr[i].p_vaddr);
+	/* 2. the program: mapped by the kernel, or, when libc.so itself is
+	 * the program, by us */
+	app.name = (char *)"";
+	app.global = app.permanent = 1;
+	uintptr_t entry = aux[AT_ENTRY];
+	int list_only = 0;
+	if (aux[AT_PHDR] == (size_t)self.phdr) {
+		/* libc's functions (errno) need a thread pointer before the
+		 * real one can be made: that needs the program's TLS size */
+		static struct pthread early;
+		__init_tp(&early);
+		self.name = argv[0];
+		int skip = 1;
+		if (!strcmp(base_name(argv[0]), "ldd"))
+			list_only = 1;
+		else if (argc > 1 && !strcmp(argv[1], "--list"))
+			list_only = 1, skip = 2;
+		if (argc <= skip) {
+			say("usage: libc.so [--list] program [arguments]\n");
+			__syscall1(SYS_exit_group, 1);
+		}
+		const char *prog = argv[skip];
+		app.path = prog;
+		int fd = open(prog, O_RDONLY | O_CLOEXEC);
+		if (fd < 0)
+			fatal("cannot open ", prog, 0);
+		entry = map_library(fd, &app, 1);
+		close(fd);
+		int dynamic = 0;
+		for (size_t i = 0; i < app.phnum; i++)
+			dynamic |= app.phdr[i].p_type == PT_DYNAMIC;
+		if (!dynamic)
+			fatal("not a dynamically linked program: ", prog, 0);
+		/* the stack the program would have had: our own arguments
+		 * dropped, the aux vector describing it */
+		sp += skip;
+		sp[0] = argc - skip;
+		*spp = sp;
+		argc -= skip;
+		argv += skip;
+		for (size_t *a = auxv; a[0]; a += 2) {
+			switch (a[0]) {
+			case AT_PHDR: a[1] = (size_t)app.phdr; break;
+			case AT_PHNUM: a[1] = app.phnum; break;
+			case AT_ENTRY: a[1] = entry; break;
+			case AT_BASE: a[1] = base; break;
+			case AT_EXECFN: a[1] = (size_t)prog; break;
+			}
+		}
+		__auxv_of(envp, aux);
+	} else {
+		app.phdr = (const Elf64_Phdr *)aux[AT_PHDR];
+		app.phnum = aux[AT_PHNUM];
+		app.base = 0;
+		for (size_t i = 0; i < app.phnum; i++)
+			if (app.phdr[i].p_type == PT_PHDR)
+				app.base = aux[AT_PHDR] - app.phdr[i].p_vaddr;
+		/* its path, for $ORIGIN */
+		app.path = aux[AT_EXECFN] ? (const char *)aux[AT_EXECFN] : argc > 0 && argv[0] ? argv[0] : "";
+		for (size_t i = 0; i < app.phnum; i++)
+			if (app.phdr[i].p_type == PT_INTERP)
+				self.name = (char *)(app.base + app.phdr[i].p_vaddr);
+		set_extent(&app);
+	}
+	self.path = self.name;
 
 	/* 3. static TLS of the program and libc, with room left below for
 	 * the libraries; then the thread pointer, canary and guard */
@@ -703,74 +1127,498 @@ hidden uintptr_t __dls_start(long *sp)
 		}
 	}
 	__tls_layout();
-	size_t tls_limit = __libc.tls_offset + TLS_SURPLUS;
 	for (int k = 0; k < 2; k++)
 		if (mods[k]->tls_id)
 			mods[k]->tls_offset = __libc.tls_mods[mods[k]->tls_id - 1].offset;
 	static const unsigned char zero_rnd[16];
 	__setup_tcb(aux[AT_RANDOM] ? (const unsigned char *)aux[AT_RANDOM] : zero_rnd, TLS_SURPLUS);
 	__wipe_random(aux);
+	size_t tls_capacity = __libc.tls_reserve;
 
 	/* 4. bind libc against the program and itself, so the loader can use
 	 * libc's functions from here on */
 	decode(&app);
 	decode(&self);
+	head = &app;
 	app.next = &self;
-	__dso_head = &app;
 	relocate(&self, 1);
 
 	/* 5. the libraries */
-	secure = aux[AT_SECURE] != 0 || aux[AT_UID] != aux[AT_EUID] || aux[AT_GID] != aux[AT_EGID];
-	for (char **e = envp; *e; e++)
+	for (char **e = envp; *e; e++) {
 		if (!strncmp(*e, "LD_LIBRARY_PATH=", 16))
 			env_library_path = *e + 16;
+		else if (!strncmp(*e, "LD_PRELOAD=", 11))
+			env_preload = *e + 11;
+	}
+	head = tail = 0;
 	app.next = 0;
-	__dso_head = 0;
-	dso_tail = 0;
-	dso_count = 0;
-	app.in_list = 1;
+	adds = 0;
 	append(&app);
-	load_deps();
-	setup_library_tls(tls_limit);
+	load_deps(&app);
+	list_self();
+	if (list_only)
+		list_objects();
+	assign_tls(head, tls_capacity);
 
 	/* 6. bind everything else: dependencies before the objects that
 	 * need them (the program last: its COPY relocations copy their
-	 * data), then make the relocated data read-only */
-	order_init(&app);
-	for (int k = 0; k < init_n; k++)
-		if (init_order[k] != &self)
-			relocate(init_order[k], 0);
-	for (struct dso *d = __dso_head; d; d = d->next)
+	 * data); tell debuggers where the object list is; make the
+	 * relocated data read-only; copy the (now relocated) TLS images */
+	int n = 0;
+	for (struct dso *d = head; d; d = d->next)
+		n++;
+	struct dso **order = dl_alloc((size_t)n * sizeof *order);
+	int norder = 0;
+	order_init(&app, order, &norder);
+	for (struct dso *d = head; d; d = d->next)
+		order_init(d, order, &norder); /* preloads nothing needs */
+	for (int k = 0; k < norder; k++)
+		if (order[k] != &self)
+			relocate(order[k], 0);
+	_r_debug.r_version = 1;
+	_r_debug.r_map = (struct link_map *)head;
+	_r_debug.r_brk = (uintptr_t)_dl_debug_state;
+	_r_debug.r_ldbase = base;
+	for (Elf64_Dyn *v = (Elf64_Dyn *)app.dynv; v->d_tag; v++)
+		if (v->d_tag == DT_DEBUG)
+			v->d_un.d_ptr = (uintptr_t)&_r_debug;
+	for (struct dso *d = head; d; d = d->next)
 		protect_relro(d);
+	__copy_tls((uintptr_t)__self());
+	/* what dlopen may use in every thread */
+	size_t want = ROUND_UP(__libc.tls_offset + DLOPEN_TLS, PAGE_SZ);
+	__libc.tls_reserve = want < tls_capacity ? want : tls_capacity;
 
 	/* 7. libc's state, then the constructors */
 	__libc.dynamic = 1;
 	__init_libc(argc, argv, envp, aux);
-	for (int k = 0; k < init_n; k++)
-		run_init(init_order[k]);
-	return aux[AT_ENTRY];
+	started = 1;
+	debug_event(RT_CONSISTENT);
+	for (int k = 0; k < norder; k++)
+		run_init(order[k]);
+	return entry;
 }
 
-/* ---- for dl_iterate_phdr and _dl_find_object ---- */
+/* ---- dlopen and friends ---- */
 
-hidden int __dl_object(int i, struct dl_phdr_info *info)
+static void rollback(struct dso *old_tail, int tls_count, size_t tls_offset)
 {
-	struct dso *d = __dso_head;
-	for (; d && i; i--)
-		d = d->next;
-	if (!d)
+	if (cur_fd >= 0) {
+		close(cur_fd);
+		cur_fd = -1;
+	}
+	struct dso *d = old_tail->next;
+	while (d) {
+		struct dso *next = d->next;
+		if (d->map)
+			munmap(d->map, d->map_len);
+		subs++;
+		free_dso(d);
+		d = next;
+	}
+	old_tail->next = 0;
+	tail = old_tail;
+	__libc.tls_count = tls_count;
+	__libc.tls_offset = tls_offset;
+}
+
+/* The part of dlopen that can fail (fail() returns to dlopen, which
+ * undoes it). A function of its own, so that nothing dlopen keeps in
+ * registers is changed between setjmp and longjmp. */
+struct opening {
+	struct dso *h, *first;   /* the handle; the first object loaded */
+	struct dso **order;      /* the new objects, dependencies first */
+	int norder, tls;
+};
+
+static __attribute__((__noinline__)) void open_objects(const char *file, int mode, struct dso *caller,
+                                                       struct dso *old_tail, struct opening *o)
+{
+	struct dso *h;
+	if (mode & RTLD_NOLOAD) {
+		h = find_loaded(file);
+		if (!h)
+			fail("not loaded: ", file, 0);
+	} else {
+		h = load_library(file, caller, 1);
+	}
+	o->h = h;
+	struct dso *first = old_tail->next;
+	o->first = first;
+	if (first) {
+		load_deps(first);
+		make_scope(h);
+		for (struct dso *d = first; d; d = d->next) {
+			d->lscope = h->scope;
+			d->nlscope = h->nscope;
+		}
+		o->tls = assign_tls(first, __libc.tls_reserve);
+		int n = 0;
+		for (struct dso *d = first; d; d = d->next)
+			n++;
+		o->order = dl_alloc((size_t)n * sizeof *o->order);
+		order_init(h, o->order, &o->norder);
+		for (int k = 0; k < o->norder; k++)
+			relocate(o->order[k], 0);
+		for (struct dso *d = first; d; d = d->next) {
+			protect_relro(d);
+			d->lscope = 0; /* h may be unloaded before d */
+			d->nlscope = 0;
+		}
+	}
+	make_scope(h);
+}
+
+void *dlopen(const char *file, int mode)
+{
+	if (!file)
+		return &app; /* the global scope */
+	if (!(mode & (RTLD_LAZY | RTLD_NOW))) {
+		set_error("invalid dlopen mode", 0);
 		return 0;
+	}
+	uintptr_t ra = (uintptr_t)__builtin_return_address(0);
+	dl_lock();
+	struct dso *caller = addr_dso(ra);
+	if (!caller)
+		caller = &app;
+	struct dso *old_tail = tail;
+	int old_tls_count = __libc.tls_count;
+	size_t old_tls_offset = __libc.tls_offset;
+	jmp_buf jb, *prev = fail_jb;
+	struct opening o = { 0 };
+	debug_event(RT_ADD);
+	if (setjmp(jb)) {
+		fail_jb = prev;
+		rollback(old_tail, old_tls_count, old_tls_offset);
+		free(o.order);
+		debug_event(RT_CONSISTENT);
+		set_error(fail_msg, 0);
+		dl_unlock();
+		return 0;
+	}
+	fail_jb = &jb;
+	open_objects(file, mode, caller, old_tail, &o);
+	fail_jb = prev;
+
+	/* nothing can fail from here on */
+	struct dso *h = o.h;
+	if (o.tls)
+		__for_each_thread(init_tls, o.first);
+	h->opens++;
+	for (int i = 0; i < h->nscope; i++) {
+		h->scope[i]->refcnt++;
+		if (mode & RTLD_GLOBAL)
+			h->scope[i]->global = 1;
+	}
+	if (mode & RTLD_NODELETE)
+		h->nodelete = 1;
+	debug_event(RT_CONSISTENT);
+	for (int k = 0; k < o.norder; k++)
+		run_init(o.order[k]);
+	free(o.order);
+	dl_unlock();
+	return h;
+}
+
+static void keep_deps(struct dso *d)
+{
+	for (int i = 0; i < d->ndeps; i++) {
+		if (d->deps[i]->doomed) {
+			d->deps[i]->doomed = 0;
+			keep_deps(d->deps[i]);
+		}
+	}
+}
+
+int dlclose(void *p)
+{
+	dl_lock();
+	struct dso *h = valid_handle(p);
+	if (h == &app) {
+		dl_unlock();
+		return 0;
+	}
+	if (!h || !h->opens) {
+		set_error("invalid handle", 0);
+		dl_unlock();
+		return -1;
+	}
+	h->opens--;
+	for (int i = 0; i < h->nscope; i++) {
+		struct dso *d = h->scope[i];
+		d->doomed = !--d->refcnt && !d->permanent && !d->nodelete && !d->tls_id;
+	}
+	/* what stays keeps its dependencies */
+	for (struct dso *d = head; d; d = d->next)
+		if (!d->doomed)
+			keep_deps(d);
+	int any = 0;
+	for (struct dso *d = head; d; d = d->next)
+		any |= d->doomed;
+	if (any) {
+		debug_event(RT_DELETE);
+		/* destructors, in the usual order (a destructor may itself
+		 * call dlclose: start over each time) */
+		for (;;) {
+			struct dso **pp = &fini_head;
+			while (*pp && !(*pp)->doomed)
+				pp = &(*pp)->fini_next;
+			struct dso *d = *pp;
+			if (!d)
+				break;
+			*pp = d->fini_next;
+			run_fini(d);
+		}
+		/* atexit and C++ static destructors registered by them */
+		for (struct dso *d = head; d; d = d->next)
+			if (d->doomed)
+				__exit_fns_in_range((uintptr_t)d->map, (uintptr_t)d->map + d->map_len);
+		for (struct dso *d = head, *next; d; d = next) {
+			next = d->next;
+			if (!d->doomed)
+				continue;
+			unlink_dso(d);
+			munmap(d->map, d->map_len);
+			free_dso(d);
+		}
+		debug_event(RT_CONSISTENT);
+	}
+	dl_unlock();
+	return 0;
+}
+
+static void *sym_addr(struct dso *d, const Elf64_Sym *s)
+{
+	if (ELF64_ST_TYPE(s->st_info) == STT_TLS)
+		return (char *)__self() - d->tls_offset + s->st_value;
+	return (void *)(d->base + s->st_value);
+}
+
+void *dlsym(void *restrict p, const char *restrict name)
+{
+	uintptr_t ra = (uintptr_t)__builtin_return_address(0);
+	dl_lock();
+	struct name nm = mkname(name);
+	const Elf64_Sym *s = 0;
+	struct dso *def = 0;
+	if (p == RTLD_DEFAULT || p == &app) {
+		struct dso *caller = addr_dso(ra);
+		s = lookup(&nm, caller ? caller->scope : 0, caller ? caller->nscope : 0, 0, &def);
+	} else if (p == RTLD_NEXT) {
+		struct dso *caller = addr_dso(ra);
+		if (!caller) {
+			set_error("RTLD_NEXT used outside a loaded object", 0);
+			dl_unlock();
+			return 0;
+		}
+		for (struct dso *d = caller->next; d && !s; d = d->next)
+			if (d->global && (s = lookup_in(d, &nm)))
+				def = d;
+	} else {
+		struct dso *h = valid_handle(p);
+		if (!h || !h->scope || (!h->permanent && !h->opens)) {
+			set_error("invalid handle", 0);
+			dl_unlock();
+			return 0;
+		}
+		s = lookup_scope(h->scope, h->nscope, &nm, 0, &def);
+	}
+	if (s && ELF64_ST_TYPE(s->st_info) == STT_GNU_IFUNC)
+		s = 0;
+	void *r = s ? sym_addr(def, s) : 0;
+	if (!s)
+		set_error("symbol not found: ", name);
+	dl_unlock();
+	return r;
+}
+
+char *dlerror(void)
+{
+	if (!err_set)
+		return 0;
+	err_set = 0;
+	return err_buf;
+}
+
+static size_t count_syms(const struct dso *d)
+{
+	if (d->hashtab)
+		return d->hashtab[1];
+	const uint32_t *ht = d->ghashtab;
+	uint32_t nbuckets = ht[0], symoffset = ht[1], bloom_size = ht[2];
+	const uint32_t *buckets = ht + 4 + 2 * bloom_size;
+	const uint32_t *chain = buckets + nbuckets;
+	uint32_t max = 0;
+	for (uint32_t i = 0; i < nbuckets; i++)
+		if (buckets[i] > max)
+			max = buckets[i];
+	if (max < symoffset)
+		return symoffset;
+	while (!(chain[max - symoffset] & 1))
+		max++;
+	return max + 1;
+}
+
+int dladdr(const void *addr, Dl_info *info)
+{
+	dl_lock();
+	struct dso *d = addr_dso((uintptr_t)addr);
+	if (!d) {
+		dl_unlock();
+		return 0;
+	}
+	info->dli_fname = d == &app ? app.path : d->name;
+	info->dli_fbase = d->map;
+	info->dli_sname = 0;
+	info->dli_saddr = 0;
+	const Elf64_Sym *best = 0;
+	uintptr_t a = (uintptr_t)addr;
+	size_t n = count_syms(d);
+	for (size_t i = 1; i < n; i++) {
+		const Elf64_Sym *s = &d->syms[i];
+		int t = ELF64_ST_TYPE(s->st_info);
+		if (!defined(s) || t == STT_TLS || t == STT_GNU_IFUNC)
+			continue;
+		uintptr_t v = d->base + s->st_value;
+		if (v <= a && (!best || v > d->base + best->st_value))
+			best = s;
+	}
+	if (best) {
+		uintptr_t v = d->base + best->st_value;
+		if (a == v || a - v < best->st_size) {
+			info->dli_sname = d->strings + best->st_name;
+			info->dli_saddr = (void *)v;
+		}
+	}
+	dl_unlock();
+	return 1;
+}
+
+int dlinfo(void *restrict p, int req, void *restrict arg)
+{
+	dl_lock();
+	struct dso *h = valid_handle(p);
+	int r = 0;
+	if (!h) {
+		set_error("invalid handle", 0);
+		r = -1;
+	} else if (req == RTLD_DI_LINKMAP) {
+		*(struct link_map **)arg = (struct link_map *)h;
+	} else if (req == RTLD_DI_ORIGIN) {
+		const char *path = h == &app ? app.path : h->path;
+		size_t l = dir_len(path);
+		if (!l)
+			memcpy(arg, ".", 2);
+		else {
+			memcpy(arg, path, l);
+			((char *)arg)[l] = 0;
+		}
+	} else if (req == RTLD_DI_TLS_MODID) {
+		*(size_t *)arg = (size_t)h->tls_id;
+	} else if (req == RTLD_DI_TLS_DATA) {
+		*(void **)arg = h->tls_id ? (char *)__self() - h->tls_offset : 0;
+	} else {
+		set_error("unsupported dlinfo request", 0);
+		r = -1;
+	}
+	dl_unlock();
+	return r;
+}
+
+/* __cxa_thread_atexit_impl: an object with a thread_local destructor
+ * cannot be unloaded */
+hidden void __dl_pin(const void *addr)
+{
+	dl_lock();
+	struct dso *d = addr_dso((uintptr_t)addr);
+	if (d)
+		d->nodelete = 1;
+	dl_unlock();
+}
+
+/* ---- dl_iterate_phdr and _dl_find_object ---- */
+
+static void phdr_info(const struct dso *d, struct dl_phdr_info *info)
+{
 	*info = (struct dl_phdr_info){ 0 };
 	info->dlpi_addr = d->base;
-	info->dlpi_name = d == &app ? "" : d->name;
+	info->dlpi_name = d->name;
 	info->dlpi_phdr = d->phdr;
 	info->dlpi_phnum = (Elf64_Half)d->phnum;
-	info->dlpi_adds = (unsigned long long)dso_count;
 	if (d->tls_id) {
 		info->dlpi_tls_modid = (size_t)d->tls_id;
 		info->dlpi_tls_data = (char *)__self() - d->tls_offset;
 	}
+}
+
+int dl_iterate_phdr(int (*cb)(struct dl_phdr_info *, size_t, void *), void *arg)
+{
+	struct dl_phdr_info info;
+	int r = 0;
+	dl_lock();
+	int vdso = __vdso_info(&info);
+	unsigned long long a = adds + (unsigned)vdso;
+	for (struct dso *d = head; d && !r; d = d->next) {
+		phdr_info(d, &info);
+		info.dlpi_adds = a;
+		info.dlpi_subs = subs;
+		r = cb(&info, sizeof info, arg);
+	}
+	if (!r && __vdso_info(&info)) {
+		info.dlpi_adds = a;
+		info.dlpi_subs = subs;
+		r = cb(&info, sizeof info, arg);
+	}
+	dl_unlock();
+	return r;
+}
+
+static int find_in(const struct dl_phdr_info *info, uintptr_t pc, struct dl_find_object *r, struct link_map *map)
+{
+	uintptr_t lo = UINTPTR_MAX, hi = 0;
+	int inside = 0;
+	void *eh = 0;
+	for (size_t k = 0; k < info->dlpi_phnum; k++) {
+		const Elf64_Phdr *p = &info->dlpi_phdr[k];
+		if (p->p_type == PT_LOAD) {
+			uintptr_t s = info->dlpi_addr + p->p_vaddr, e = s + p->p_memsz;
+			inside |= pc >= s && pc < e;
+			if (s < lo)
+				lo = s;
+			if (e > hi)
+				hi = e;
+		} else if (p->p_type == PT_GNU_EH_FRAME) {
+			eh = (void *)(info->dlpi_addr + p->p_vaddr);
+		}
+	}
+	if (!inside)
+		return 0;
+	*r = (struct dl_find_object){ 0 };
+	r->dlfo_map_start = (void *)lo;
+	r->dlfo_map_end = (void *)hi;
+	r->dlfo_link_map = map;
+	r->dlfo_eh_frame = eh;
 	return 1;
+}
+
+int _dl_find_object(void *pc, struct dl_find_object *r)
+{
+	static struct link_map vdso_map;
+	struct dl_phdr_info info;
+	int found = 0;
+	dl_lock();
+	struct dso *d = addr_dso((uintptr_t)pc);
+	if (d) {
+		phdr_info(d, &info);
+		found = find_in(&info, (uintptr_t)pc, r, (struct link_map *)d);
+	} else if (__vdso_info(&info)) {
+		vdso_map.l_addr = info.dlpi_addr;
+		vdso_map.l_name = (char *)info.dlpi_name;
+		found = find_in(&info, (uintptr_t)pc, r, &vdso_map);
+	}
+	dl_unlock();
+	return found ? 0 : -1;
 }
 
 #endif
